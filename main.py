@@ -213,6 +213,7 @@ class AuctionBrowser(QMainWindow):
 
         self.vision_container = QVBoxLayout()
         self.vision_container.setSpacing(4)
+        self.vision_items_displayed = []
         self.card_images.layout.addLayout(self.vision_container)
 
         self.card_images.layout.addLayout(self.image_grid)
@@ -319,8 +320,15 @@ class AuctionBrowser(QMainWindow):
         self.btn_analyze.setEnabled(False)
         self.btn_analyze.setText("Analyzing images...")
 
+        clear_layout(self.vision_container)
+        placeholder = QLabel("Analyzing images... (0/%d)" % len(image_bytes))
+        placeholder.setStyleSheet("color:#9ca3af;")
+        self.vision_container.addWidget(placeholder)
+        self.vision_items_displayed = []
+
         # ✅ pass BYTES, not URLs
         self.vision_worker = VisionWorker(image_bytes)
+        self.vision_worker.progress.connect(self.on_vision_progress)
         self.vision_worker.finished.connect(self.on_vision_done)
         self.vision_worker.start()
 
@@ -342,6 +350,22 @@ class AuctionBrowser(QMainWindow):
         self.btn_analyze.setText("Analyze Images")
 
         self.render_vision_items(result.get("items", []))
+
+    def on_vision_progress(self, current, total, items):
+        self.btn_analyze.setText(f"Analyzing images... ({current}/{total})")
+
+        new_items = items[len(self.vision_items_displayed):]
+        if not new_items:
+            return
+
+        if self.vision_container.count() == 1:
+            w = self.vision_container.itemAt(0).widget()
+            if isinstance(w, QLabel) and "Analyzing images" in w.text():
+                self.vision_container.removeWidget(w)
+                w.deleteLater()
+
+        self.append_vision_items(new_items)
+        self.vision_items_displayed.extend(new_items)
 
 
     # ================= LIST / FILTER =================
@@ -520,6 +544,7 @@ class AuctionBrowser(QMainWindow):
 
     def render_vision_items(self, items):
         clear_layout(self.vision_container)
+        self.vision_items_displayed = []
 
         if not items:
             placeholder = QLabel("Analyze images to see itemized estimates.")
@@ -527,39 +552,48 @@ class AuctionBrowser(QMainWindow):
             self.vision_container.addWidget(placeholder)
             return
 
+        self.append_vision_items(items)
+        self.vision_items_displayed = list(items)
+
+    def append_vision_items(self, items):
         for it in items:
-            name = it.get("name") or "Unknown item"
-            brand = it.get("brand") or "Unknown brand"
-            conf = float(it.get("confidence", 0))
-            low = float(it.get("low", 0))
-            high = float(it.get("high", 0))
-
-            if conf >= 0.8:
-                badge_label, badge_color = "High", "#22c55e"
-            elif conf >= 0.5:
-                badge_label, badge_color = "Medium", "#eab308"
-            else:
-                badge_label, badge_color = "Low", "#ef4444"
-
-            row = QWidget()
-            row_layout = QHBoxLayout(row)
-            row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.setSpacing(8)
-
-            badge = QLabel(f"{badge_label} • {conf*100:.0f}%")
-            badge.setStyleSheet(
-                "color:white; padding:2px 8px; border-radius:8px; font-weight:600;"
-                f"background:{badge_color};"
-            )
-
-            info = QLabel(
-                f"<b>{name}</b> — {brand} • ${low:,.0f}–${high:,.0f}"
-            )
-            info.setWordWrap(True)
-
-            row_layout.addWidget(badge)
-            row_layout.addWidget(info, 1)
+            row = self.build_vision_row(it)
             self.vision_container.addWidget(row)
+
+    def build_vision_row(self, it):
+        name = it.get("name") or "Unknown item"
+        brand = it.get("brand") or "Unknown brand"
+        conf = float(it.get("confidence", 0))
+        low = float(it.get("low", 0))
+        high = float(it.get("high", 0))
+
+        if conf >= 0.8:
+            badge_label, badge_color = "High", "#22c55e"
+        elif conf >= 0.5:
+            badge_label, badge_color = "Medium", "#eab308"
+        else:
+            badge_label, badge_color = "Low", "#ef4444"
+
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
+
+        badge = QLabel(f"{badge_label} • {conf*100:.0f}%")
+        badge.setStyleSheet(
+            "color:white; padding:2px 8px; border-radius:8px; font-weight:600;"
+            f"background:{badge_color};"
+        )
+
+        info = QLabel(
+            f"<b>{name}</b> — {brand} • ${low:,.0f}–${high:,.0f}"
+        )
+        info.setWordWrap(True)
+
+        row_layout.addWidget(badge)
+        row_layout.addWidget(info, 1)
+
+        return row
 
     # ================= TIMER =================
     def update_countdown(self):
