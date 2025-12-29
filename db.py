@@ -21,10 +21,17 @@ def init_db():
             items_json TEXT,
             total_low REAL,
             total_high REAL,
-            updated_at TEXT
+            updated_at TEXT,
+            facility_name TEXT
         )
         """
     )
+
+    try:
+        c.execute("ALTER TABLE vision_results ADD COLUMN facility_name TEXT")
+    except sqlite3.OperationalError:
+        # Column already exists
+        pass
     conn.commit()
     conn.close()
 
@@ -88,19 +95,20 @@ def get_recent_bids(auction_id, limit=20):
     return [r[0] for r in rows]
 
 
-def save_vision_result(auction_id, result):
+def save_vision_result(auction_id, result, facility_name=""):
     conn = sqlite3.connect("auctions.db")
     c = conn.cursor()
 
     c.execute(
         """
-        INSERT INTO vision_results (auction_id, items_json, total_low, total_high, updated_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO vision_results (auction_id, items_json, total_low, total_high, updated_at, facility_name)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(auction_id) DO UPDATE SET
             items_json=excluded.items_json,
             total_low=excluded.total_low,
             total_high=excluded.total_high,
-            updated_at=excluded.updated_at
+            updated_at=excluded.updated_at,
+            facility_name=COALESCE(NULLIF(excluded.facility_name, ''), vision_results.facility_name)
         """,
         (
             auction_id,
@@ -108,6 +116,7 @@ def save_vision_result(auction_id, result):
             float(result.get("total_low", 0)),
             float(result.get("total_high", 0)),
             datetime.now(timezone.utc).isoformat(),
+            facility_name,
         ),
     )
 
@@ -146,3 +155,35 @@ def load_vision_result(auction_id):
         "total_low": float(total_low or 0),
         "total_high": float(total_high or 0),
     }
+
+
+def get_recent_vision_results(limit=10):
+    conn = sqlite3.connect("auctions.db")
+    c = conn.cursor()
+
+    c.execute(
+        """
+        SELECT auction_id, facility_name, updated_at, total_low, total_high
+        FROM vision_results
+        ORDER BY datetime(updated_at) DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+
+    rows = c.fetchall()
+    conn.close()
+
+    results = []
+    for row in rows:
+        aid, facility_name, updated_at, low, high = row
+        results.append(
+            {
+                "auction_id": aid,
+                "facility_name": facility_name or "Unknown facility",
+                "updated_at": updated_at,
+                "total_low": float(low or 0),
+                "total_high": float(high or 0),
+            }
+        )
+    return results

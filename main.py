@@ -19,6 +19,7 @@ from db import (
     get_recent_bids,
     save_vision_result,
     load_vision_result,
+    get_recent_vision_results,
 )
 from scoring import profit_score
 from alerts import SniperAlerts
@@ -81,6 +82,7 @@ class AuctionBrowser(QMainWindow):
         self.vision_aid_in_progress = None
         self.analysis_placeholder = None
         self.vision_worker = None
+        self.recent_vision_results = []
 
         splitter = QSplitter(Qt.Horizontal)
         self.setCentralWidget(splitter)
@@ -141,6 +143,16 @@ class AuctionBrowser(QMainWindow):
         self.time_slider.valueChanged.connect(self.on_time_slider)
 
         left_layout.addWidget(filters)
+
+        self.recent_card = Card("Recent Vision Results", fixed_height=180)
+        recent_layout = QVBoxLayout()
+        recent_layout.setContentsMargins(0, 0, 0, 0)
+        self.recent_list = QListWidget()
+        self.recent_list.setFixedHeight(140)
+        self.recent_list.itemClicked.connect(self.load_cached_analysis)
+        recent_layout.addWidget(self.recent_list)
+        self.recent_card.layout.addLayout(recent_layout)
+        left_layout.addWidget(self.recent_card)
 
         # ---- AUCTION LIST (FIXED HEIGHT) ----
         self.list = QListWidget()
@@ -271,6 +283,7 @@ class AuctionBrowser(QMainWindow):
         self.timer.start(1000)
 
         self.bootstrap()
+        self.refresh_recent_vision_results()
 
     # ================= DATA =================
     def run_worker(self, fn, cb):
@@ -283,6 +296,29 @@ class AuctionBrowser(QMainWindow):
     def bootstrap(self):
         self.run_worker(self.fetch_ip, lambda ip: setattr(self, "user_ip", ip))
         self.run_worker(self.fetch_list, self.populate_list)
+
+    def refresh_recent_vision_results(self):
+        self.recent_vision_results = get_recent_vision_results(limit=10)
+        self.recent_list.clear()
+
+        if not self.recent_vision_results:
+            placeholder = QListWidgetItem("No saved analyses yet.")
+            placeholder.setFlags(Qt.NoItemFlags)
+            self.recent_list.addItem(placeholder)
+            return
+
+        for entry in self.recent_vision_results:
+            ts = entry.get("updated_at")
+            try:
+                dt = datetime.fromisoformat(ts)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                ts_fmt = dt.astimezone().strftime("%b %d • %I:%M %p")
+            except Exception:
+                ts_fmt = "Unknown time"
+
+            label = f"{entry['facility_name']} — {ts_fmt}"
+            self.recent_list.addItem(label)
 
     def fetch_ip(self):
         r = requests.get(f"{API_BASE}/p/users/check/user-ip", headers=HEADERS)
@@ -390,7 +426,13 @@ class AuctionBrowser(QMainWindow):
 
         if clean_run:
             self.vision_resale[aid] = result
-            save_vision_result(aid, result)
+            facility_name = (
+                self.current.get("facility_name")
+                or self.current.get("facility", {}).get("name")
+                or ""
+            )
+            save_vision_result(aid, result, facility_name=facility_name)
+            self.refresh_recent_vision_results()
 
             lo = result.get("total_low", 0)
             hi = result.get("total_high", 0)
@@ -558,6 +600,26 @@ class AuctionBrowser(QMainWindow):
             self.state.toggle_watch(aid)
             self.apply_filters()
 
+    def load_cached_analysis(self, item):
+        if not item or not self.recent_vision_results or self.vision_worker:
+            return
+
+        idx = self.recent_list.row(item)
+        if idx < 0 or idx >= len(self.recent_vision_results):
+            return
+
+        aid = self.recent_vision_results[idx]["auction_id"]
+
+        def fetch():
+            r = requests.get(
+                f"{API_BASE}/p/auctions/{aid}",
+                headers=HEADERS,
+                params={"refresh": "true", "user_ip": self.user_ip},
+            )
+            return r.json()
+
+        self.run_worker(fetch, self.render)
+
     # ================= SELECT =================
     def select_auction(self, item):
         idx = self.list.row(item)
@@ -689,6 +751,7 @@ class AuctionBrowser(QMainWindow):
         self.list.setToolTip(
             "Selection is temporarily disabled while image analysis runs."
         )
+        self.recent_list.setEnabled(False)
 
     def unlock_auction_list(self):
         self.list.setEnabled(True)
@@ -699,6 +762,7 @@ class AuctionBrowser(QMainWindow):
         self.btn_analyze.setToolTip("Analyze images to estimate resale value.")
         self.btn_cancel_analyze.setVisible(False)
         self.btn_cancel_analyze.setEnabled(True)
+        self.recent_list.setEnabled(True)
 
     def append_vision_items(self, items):
         for it in items:
