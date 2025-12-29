@@ -6,11 +6,12 @@ from vision_cache import image_hash, get_cached, set_cached
 
 class VisionWorker(QThread):
     progress = Signal(int, int, list)
+    error = Signal(str)
     finished = Signal(dict)
 
-    def __init__(self, images):
+    def __init__(self, image_urls):
         super().__init__()
-        self.images = images
+        self.image_urls = image_urls
 
     def run(self):
         total_low = 0
@@ -19,34 +20,44 @@ class VisionWorker(QThread):
         seen_names = []
         seen_keys = set()
 
-        total = len(self.images)
+        total = len(self.image_urls)
 
-        for idx, img_bytes in enumerate(self.images, start=1):
-            result = analyze_image(img_bytes, seen_items=seen_names)
-            items = result.get("items", [])
+        for idx, url in enumerate(self.image_urls, start=1):
+            img_bytes = None
 
-            for it in items:
-                low = float(it.get("low", 0))
-                high = float(it.get("high", 0))
-                conf = float(it.get("confidence", 0))
-                name = str(it.get("name", "")).strip()
-                brand = str(it.get("brand", "")).strip()
+            try:
+                r = requests.get(url, timeout=10)
+                r.raise_for_status()
+                img_bytes = r.content
+            except Exception as e:
+                self.error.emit(f"Failed to fetch image {idx}/{total}: {e}")
 
-                key = f"{name.lower()}|{brand.lower()}" if name else None
+            if img_bytes:
+                result = analyze_image(img_bytes, seen_items=seen_names)
+                items = result.get("items", [])
 
-                # Skip duplicates already counted in previous images
-                if key and key in seen_keys:
-                    continue
+                for it in items:
+                    low = float(it.get("low", 0))
+                    high = float(it.get("high", 0))
+                    conf = float(it.get("confidence", 0))
+                    name = str(it.get("name", "")).strip()
+                    brand = str(it.get("brand", "")).strip()
 
-                # Confidence-weighted contribution
-                total_low += low * conf
-                total_high += high * conf
+                    key = f"{name.lower()}|{brand.lower()}" if name else None
 
-                if key:
-                    seen_keys.add(key)
-                    seen_names.append(name)
+                    # Skip duplicates already counted in previous images
+                    if key and key in seen_keys:
+                        continue
 
-                all_items.append(it)
+                    # Confidence-weighted contribution
+                    total_low += low * conf
+                    total_high += high * conf
+
+                    if key:
+                        seen_keys.add(key)
+                        seen_names.append(name)
+
+                    all_items.append(it)
 
             self.progress.emit(idx, total, list(all_items))
 
@@ -55,6 +66,6 @@ class VisionWorker(QThread):
             "total_low": int(total_low),
             "total_high": int(total_high)
         }
-        
+
         self.finished.emit(self.result)
 
