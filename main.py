@@ -804,6 +804,9 @@ class AuctionBrowser(QMainWindow):
 
         for url, info in summaries.items():
             items = info.get("items", [])
+            meta = self.image_tile_map.get(url, {})
+            meta["items"] = items
+            self.image_tile_map[url] = meta
             if items:
                 label = f"Analyzed ({len(items)} items)"
                 color = "#22c55e"
@@ -851,10 +854,11 @@ class AuctionBrowser(QMainWindow):
             )
         )
 
-        def handler(event, p=active, lbl=label):
+        def handler(event, p=active, lbl=label, boxes=meta.get("items", [])):
             lbl.clicked.emit(lbl.payload)
             if p:
-                ImageViewer(p).exec()
+                overlay_boxes = [] if meta.get("annotated_pixmap") else boxes
+                ImageViewer(p, boxes=overlay_boxes).exec()
 
         label.mousePressEvent = handler
 
@@ -927,6 +931,10 @@ class AuctionBrowser(QMainWindow):
             if annotated_bytes
             else existing.get("annotated"),
         }
+
+        meta = self.image_tile_map.get(url, {})
+        meta["items"] = items or []
+        self.image_tile_map[url] = meta
 
     def on_image_clicked(self, payload):
         if not payload or not self.current:
