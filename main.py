@@ -77,8 +77,10 @@ class AuctionBrowser(QMainWindow):
         self.threads = []
         self.image_threads = []
         self.had_vision_error = False
+        self.analysis_cancelled = False
         self.vision_aid_in_progress = None
         self.analysis_placeholder = None
+        self.vision_worker = None
 
         splitter = QSplitter(Qt.Horizontal)
         self.setCentralWidget(splitter)
@@ -221,9 +223,17 @@ class AuctionBrowser(QMainWindow):
         self.card_images = Card("Images")
         content.addWidget(self.card_images, 3)
         self.image_grid = QGridLayout()
+        controls = QHBoxLayout()
+        controls.setSpacing(8)
         self.btn_analyze = QPushButton("Analyze Images")
         self.btn_analyze.clicked.connect(self.analyze_images)
-        self.card_images.layout.insertWidget(0, self.btn_analyze)
+        self.btn_cancel_analyze = QPushButton("Cancel analysis")
+        self.btn_cancel_analyze.setVisible(False)
+        self.btn_cancel_analyze.clicked.connect(self.cancel_analysis)
+        controls.addWidget(self.btn_analyze)
+        controls.addWidget(self.btn_cancel_analyze)
+        controls.addStretch()
+        self.card_images.layout.insertLayout(0, controls)
 
         self.vision_title = QLabel("Vision Breakdown")
         self.vision_title.setStyleSheet("font-weight:600;")
@@ -334,6 +344,7 @@ class AuctionBrowser(QMainWindow):
             self.show_analysis_error("No images available for this auction.")
             return
 
+        self.analysis_cancelled = False
         self.vision_aid_in_progress = aid
         auction_name = (
             self.current.get("facility_name")
@@ -348,6 +359,8 @@ class AuctionBrowser(QMainWindow):
         self.btn_analyze.setToolTip(
             "Selection is locked during analysis to avoid mixing auctions."
         )
+        self.btn_cancel_analyze.setVisible(True)
+        self.btn_cancel_analyze.setEnabled(True)
         self.had_vision_error = False
         self.vision_status.setStyleSheet("color:#9ca3af;")
         self.vision_status.setText("Downloading and analyzing images…")
@@ -365,6 +378,7 @@ class AuctionBrowser(QMainWindow):
         self.vision_worker = VisionWorker(image_urls, aid)
         self.vision_worker.progress.connect(self.on_vision_progress)
         self.vision_worker.error.connect(self.on_vision_error)
+        self.vision_worker.cancelled.connect(self.on_vision_cancelled)
         self.vision_worker.finished.connect(self.on_vision_done)
         self.vision_worker.start()
 
@@ -372,19 +386,32 @@ class AuctionBrowser(QMainWindow):
         if aid != self.vision_aid_in_progress or not self.current:
             return
 
-        self.vision_resale[aid] = result
-        save_vision_result(aid, result)
+        clean_run = not self.had_vision_error and not self.analysis_cancelled
 
-        lo = result.get("total_low", 0)
-        hi = result.get("total_high", 0)
+        if clean_run:
+            self.vision_resale[aid] = result
+            save_vision_result(aid, result)
 
-        self.lbl_resale.setText(f"${lo:,} – ${hi:,}")
+            lo = result.get("total_low", 0)
+            hi = result.get("total_high", 0)
 
-        if not self.had_vision_error:
+            self.lbl_resale.setText(f"${lo:,} – ${hi:,}")
             self.vision_status.setStyleSheet("color:#9ca3af;")
             self.vision_status.setText("")
+            self.render_vision_items(result.get("items", []))
+        else:
+            note = (
+                "Analysis canceled; no results saved."
+                if self.analysis_cancelled
+                else "Analysis encountered errors; results were not saved."
+            )
+            self.vision_status.setStyleSheet(
+                "color:#9ca3af;" if self.analysis_cancelled else "color:#ef4444;"
+            )
+            self.vision_status.setText(note)
+            self.render_vision_items([])
 
-        self.render_vision_items(result.get("items", []))
+        self.vision_worker = None
         self.set_analysis_active(False)
         self.unlock_auction_list()
         self.vision_aid_in_progress = None
@@ -417,6 +444,18 @@ class AuctionBrowser(QMainWindow):
         self.append_vision_items(new_items)
         self.vision_items_displayed.extend(new_items)
 
+    def on_vision_cancelled(self, aid):
+        if aid != self.vision_aid_in_progress:
+            return
+        self.analysis_cancelled = True
+        self.vision_status.setStyleSheet("color:#9ca3af;")
+        self.vision_status.setText("Analysis canceled; no results saved.")
+        self.render_vision_items([])
+        self.vision_worker = None
+        self.set_analysis_active(False)
+        self.unlock_auction_list()
+        self.vision_aid_in_progress = None
+
     def on_vision_error(self, aid, message):
         if aid != self.vision_aid_in_progress:
             return
@@ -426,6 +465,16 @@ class AuctionBrowser(QMainWindow):
         self.set_analysis_active(False)
         self.unlock_auction_list()
         self.vision_aid_in_progress = None
+        self.vision_worker = None
+
+    def cancel_analysis(self):
+        if not self.vision_worker or self.analysis_cancelled:
+            return
+        self.analysis_cancelled = True
+        self.vision_worker.request_cancel()
+        self.btn_cancel_analyze.setEnabled(False)
+        self.vision_status.setStyleSheet("color:#9ca3af;")
+        self.vision_status.setText("Canceling analysis…")
 
     def show_analysis_error(self, message):
         self.vision_status.setStyleSheet("color:#ef4444;")
@@ -624,7 +673,6 @@ class AuctionBrowser(QMainWindow):
 
     def set_analysis_active(self, active, auction_name=""):
         self.card_details.setEnabled(not active)
-        self.card_images.setEnabled(not active)
         if active:
             name = auction_name or self.title.text() or "this auction"
             self.analysis_label.setText(
@@ -649,6 +697,8 @@ class AuctionBrowser(QMainWindow):
         self.btn_analyze.setEnabled(True)
         self.btn_analyze.setText("Analyze Images")
         self.btn_analyze.setToolTip("Analyze images to estimate resale value.")
+        self.btn_cancel_analyze.setVisible(False)
+        self.btn_cancel_analyze.setEnabled(True)
 
     def append_vision_items(self, items):
         for it in items:
