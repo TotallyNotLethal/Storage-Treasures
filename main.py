@@ -2,15 +2,23 @@ import sys, json, requests, sqlite3, webbrowser, csv, base64
 from datetime import datetime, timezone
 from vision_worker import VisionWorker
 
-from PySide6.QtCore import Qt, QThread, Signal, QTimer
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSortFilterProxyModel, QRegularExpression
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QListWidget, QListWidgetItem,
     QLabel, QVBoxLayout, QHBoxLayout, QScrollArea, QPushButton,
     QFileDialog, QSplitter, QFrame, QGridLayout,
     QLineEdit, QComboBox, QSlider, QMenu, QDialog, QDialogButtonBox,
-    QMessageBox, QDoubleSpinBox,
+    QMessageBox, QDoubleSpinBox, QTableView, QAbstractItemView, QToolButton,
 )
-from PySide6.QtGui import QPixmap, QFont, QPdfWriter, QPainter, QPageSize
+from PySide6.QtGui import (
+    QPixmap,
+    QFont,
+    QPdfWriter,
+    QPainter,
+    QPageSize,
+    QStandardItemModel,
+    QStandardItem,
+)
 
 from config import API_BASE, HEADERS, SEARCH_PARAMS
 from db import (
@@ -170,14 +178,93 @@ class AuctionBrowser(QMainWindow):
         self.recent_card.layout.addLayout(recent_layout)
         left_layout.addWidget(self.recent_card)
 
+        # ---- AUCTION LIST CONTROLS ----
+        list_toolbar = QHBoxLayout()
+        list_toolbar.setSpacing(6)
+
+        list_toolbar.addWidget(QLabel("Sort:"))
+
+        self.btn_sort_time = QToolButton()
+        self.btn_sort_time.setText("Time Remaining")
+        self.btn_sort_time.setCheckable(True)
+        self.btn_sort_time.clicked.connect(lambda: self.set_sort("time"))
+        list_toolbar.addWidget(self.btn_sort_time)
+
+        self.btn_sort_score = QToolButton()
+        self.btn_sort_score.setText("Profit Score")
+        self.btn_sort_score.setCheckable(True)
+        self.btn_sort_score.clicked.connect(lambda: self.set_sort("score"))
+        list_toolbar.addWidget(self.btn_sort_score)
+
+        self.btn_sort_velocity = QToolButton()
+        self.btn_sort_velocity.setText("Bid Velocity")
+        self.btn_sort_velocity.setCheckable(True)
+        self.btn_sort_velocity.clicked.connect(lambda: self.set_sort("velocity"))
+        list_toolbar.addWidget(self.btn_sort_velocity)
+
+        list_toolbar.addStretch()
+
+        self.filter_input = QLineEdit()
+        self.filter_input.setPlaceholderText("Filter auctions…")
+        self.filter_input.textChanged.connect(self.on_filter_text)
+        list_toolbar.addWidget(self.filter_input)
+
+        left_layout.addLayout(list_toolbar)
+
         # ---- AUCTION LIST (FIXED HEIGHT) ----
-        self.list = QListWidget()
+        self.list_model = QStandardItemModel(0, 7)
+        self.list_model.setHorizontalHeaderLabels([
+            "★",
+            "Location",
+            "Unit",
+            "Bid",
+            "Score",
+            "Velocity",
+            "Time Remaining",
+        ])
+
+        self.proxy_model = QSortFilterProxyModel()
+        self.proxy_model.setFilterCaseSensitivity(Qt.CaseInsensitive)
+        self.proxy_model.setFilterKeyColumn(-1)
+        self.proxy_model.setSortRole(Qt.UserRole)
+        self.proxy_model.setSourceModel(self.list_model)
+
+        self.list = QTableView()
+        self.list.setModel(self.proxy_model)
         self.list.setFixedHeight(650)
-        self.list.itemClicked.connect(self.select_auction)
+        self.list.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.list.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.list.horizontalHeader().setStretchLastSection(True)
+        self.list.verticalHeader().setVisible(False)
+        self.list.setSortingEnabled(True)
+        self.list.clicked.connect(self.select_auction)
+        self.list.doubleClicked.connect(self.select_auction)
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self.open_list_menu)
 
         left_layout.addWidget(self.list)
+
+        status_layout = QHBoxLayout()
+        self.filter_status = QLabel("0 results")
+        self.filter_status.setStyleSheet("color:#9ca3af;")
+        status_layout.addWidget(self.filter_status)
+        status_layout.addStretch()
+        left_layout.addLayout(status_layout)
+
+        self.field_column_map = {
+            "time": 6,
+            "score": 4,
+            "velocity": 5,
+        }
+        self.sort_button_map = {
+            "time": self.btn_sort_time,
+            "score": self.btn_sort_score,
+            "velocity": self.btn_sort_velocity,
+        }
+        self.sort_order = Qt.AscendingOrder
+        self.sort_column = None
+        self.set_sort("time")
 
         splitter.addWidget(left_panel)
 
@@ -399,7 +486,9 @@ class AuctionBrowser(QMainWindow):
         SEARCH_PARAMS["search_term"] = zip_code
         SEARCH_PARAMS["search_radius"] = radius
 
-        self.list.clear()
+        self.list_model.removeRows(0, self.list_model.rowCount())
+        self.filtered = []
+        self.update_filter_status()
         self.current = None
         self.run_worker(self.fetch_list, self.populate_list)
         
@@ -590,26 +679,9 @@ class AuctionBrowser(QMainWindow):
     def populate_list(self, auctions):
         self.auctions = auctions
         self.apply_filters()
-        
-    def format_time_left(expire_utc):
-        exp = datetime.fromisoformat(expire_utc).replace(tzinfo=timezone.utc)
-        now = datetime.now(timezone.utc)
-        delta = exp - now
-
-        if delta.total_seconds() <= 0:
-            return "ENDED"
-
-        days = delta.days
-        hours = delta.seconds // 3600
-        minutes = (delta.seconds % 3600) // 60
-
-        if days > 0:
-            return f"{days}d {hours}h"
-            return f"{hours}h {minutes}m"
-
 
     def apply_filters(self):
-        self.list.clear()
+        self.list_model.removeRows(0, self.list_model.rowCount())
         self.filtered = []
 
         min_score = self.score_slider.value()
@@ -622,15 +694,17 @@ class AuctionBrowser(QMainWindow):
             ).replace(tzinfo=timezone.utc)
 
             delta = exp - now
-            hrs = delta.total_seconds() / 3600
+            hrs = max(delta.total_seconds() / 3600, 0)
 
             if delta.total_seconds() <= 0:
                 time_left = "ENDED"
+                sort_hours = float("inf")
             else:
                 days = delta.days
                 hours = delta.seconds // 3600
                 minutes = (delta.seconds % 3600) // 60
                 time_left = f"{days}d {hours}h" if days > 0 else f"{hours}h {minutes}m"
+                sort_hours = hrs
 
             vel = bid_velocity(a["auction_id"])
             score = profit_score(a, vel)
@@ -638,23 +712,101 @@ class AuctionBrowser(QMainWindow):
             if score < min_score or hrs > max_hours:
                 continue
 
-            star = "⭐ " if a["auction_id"] in self.state.watchlist else ""
-            item = QListWidgetItem(
-                f"{star}{a['city']} {a['state']} | {a['unit_size']} | "
-                f"${a['current_bid']['amount']} | {score}/100 | "
-                f"⏱ {time_left}"
-            )
+            star_item = QStandardItem("⭐" if a["auction_id"] in self.state.watchlist else "")
+            star_item.setEditable(False)
+            star_item.setData(0, Qt.UserRole)
 
-            self.list.addItem(item)
+            location_item = QStandardItem(f"{a['city']} {a['state']}")
+            location_item.setEditable(False)
+
+            unit_item = QStandardItem(a.get("unit_size", ""))
+            unit_item.setEditable(False)
+
+            bid_amount = float(a["current_bid"].get("amount", 0))
+            bid_item = QStandardItem(f"${bid_amount:.0f}")
+            bid_item.setEditable(False)
+            bid_item.setData(bid_amount, Qt.UserRole)
+
+            score_item = QStandardItem(f"{score}/100")
+            score_item.setEditable(False)
+            score_item.setData(score, Qt.UserRole)
+
+            vel_item = QStandardItem(f"{vel:.2f}/hr")
+            vel_item.setEditable(False)
+            vel_item.setData(vel, Qt.UserRole)
+
+            time_item = QStandardItem(time_left)
+            time_item.setEditable(False)
+            time_item.setData(sort_hours, Qt.UserRole)
+
+            self.list_model.appendRow([
+                star_item,
+                location_item,
+                unit_item,
+                bid_item,
+                score_item,
+                vel_item,
+                time_item,
+            ])
+
             self.filtered.append(a)
+
+        self.proxy_model.invalidateFilter()
+        self.on_filter_text(self.filter_input.text())
+        self.apply_sort()
+        self.update_filter_status()
+
+    def on_filter_text(self, text):
+        regex = QRegularExpression(text, QRegularExpression.CaseInsensitiveOption)
+        self.proxy_model.setFilterRegularExpression(regex)
+        self.update_filter_status()
+
+    def update_filter_status(self):
+        visible = self.proxy_model.rowCount()
+        total = len(self.filtered)
+        self.filter_status.setText(f"{visible} shown / {total} matched filters")
+
+    def set_sort(self, field):
+        column = self.field_column_map.get(field)
+        if column is None:
+            return
+
+        if getattr(self, "sort_column", None) == column:
+            self.sort_order = (
+                Qt.DescendingOrder
+                if self.sort_order == Qt.AscendingOrder
+                else Qt.AscendingOrder
+            )
+        else:
+            self.sort_column = column
+            self.sort_order = Qt.AscendingOrder
+
+        for key, btn in self.sort_button_map.items():
+            btn.setChecked(key == field)
+
+        self.apply_sort()
+
+    def apply_sort(self):
+        if getattr(self, "sort_column", None) is None:
+            return
+        self.list.sortByColumn(self.sort_column, self.sort_order)
+
+    def auction_from_index(self, index):
+        if not index.isValid():
+            return None
+        source_index = self.proxy_model.mapToSource(index)
+        row = source_index.row()
+        if row < 0 or row >= len(self.filtered):
+            return None
+        return self.filtered[row]
 
     # ================= WATCHLIST =================
     def open_list_menu(self, pos):
-        item = self.list.itemAt(pos)
-        if not item:
+        index = self.list.indexAt(pos)
+        auction = self.auction_from_index(index)
+        if not auction:
             return
-        idx = self.list.row(item)
-        aid = self.filtered[idx]["auction_id"]
+        aid = auction["auction_id"]
 
         menu = QMenu()
         action = menu.addAction("Toggle Watchlist ⭐")
@@ -683,9 +835,12 @@ class AuctionBrowser(QMainWindow):
         self.run_worker(fetch, self.render)
 
     # ================= SELECT =================
-    def select_auction(self, item):
-        idx = self.list.row(item)
-        aid = self.filtered[idx]["auction_id"]
+    def select_auction(self, index):
+        auction = self.auction_from_index(index)
+        if not auction:
+            return
+
+        aid = auction["auction_id"]
 
         def fetch():
             r = requests.get(
