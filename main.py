@@ -1,6 +1,8 @@
-import sys, json, requests, sqlite3, webbrowser, csv, base64
+import sys, json, requests, sqlite3, webbrowser, csv, base64, math
 from datetime import datetime, timezone
 from vision_worker import VisionWorker
+
+import pgeocode
 
 from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSortFilterProxyModel, QRegularExpression
 from PySide6.QtWidgets import (
@@ -107,6 +109,8 @@ class AuctionBrowser(QMainWindow):
         self.recent_vision_results = []
         self.image_tile_map = {}
         self.using_manual = False
+        self.zip_coord_cache = {}
+        self.geocoder = pgeocode.Nominatim("us")
 
         splitter = QSplitter(Qt.Horizontal)
         self.setCentralWidget(splitter)
@@ -287,7 +291,20 @@ class AuctionBrowser(QMainWindow):
         self.subtitle = QLabel()
         self.subtitle.setStyleSheet("color:#9ca3af;")
 
-        self.header.layout.addWidget(self.title)
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(10)
+        header_row.addWidget(self.title)
+
+        self.distance_badge = QLabel("Distance: --")
+        self.distance_badge.setStyleSheet(
+            "background:#0ea5e9; color:white; padding:6px 10px;"
+            "border-radius:10px; font-weight:600;"
+        )
+        header_row.addWidget(self.distance_badge)
+        header_row.addStretch()
+
+        self.header.layout.addLayout(header_row)
         self.header.layout.addWidget(self.subtitle)
 
         # Inline banner for analysis lock state (hidden by default)
@@ -378,7 +395,18 @@ class AuctionBrowser(QMainWindow):
 
         # ---- ACTIONS ----
         actions = QHBoxLayout()
+        actions.setSpacing(12)
         self.main.addLayout(actions)
+
+        self.map_card = Card("Map Preview")
+        self.map_preview = QLabel("Map preview unavailable")
+        self.map_preview.setAlignment(Qt.AlignCenter)
+        self.map_preview.setFixedSize(240, 170)
+        self.map_preview.setStyleSheet(
+            "border:1px solid #1f2937; border-radius:12px;"
+            "background:#0b1222; color:#9ca3af;"
+        )
+        self.map_card.layout.addWidget(self.map_preview)
 
         btn_map = QPushButton("Open in Google Maps")
         btn_map.clicked.connect(self.open_map)
@@ -392,6 +420,7 @@ class AuctionBrowser(QMainWindow):
         vision_pdf.triggered.connect(self.export_vision_pdf)
         btn_export_vision.setMenu(vision_menu)
 
+        actions.addWidget(self.map_card)
         actions.addStretch()
         actions.addWidget(btn_map)
         actions.addWidget(btn_export)
@@ -965,6 +994,9 @@ class AuctionBrowser(QMainWindow):
 
         self.apply_image_summaries(aid)
 
+        self.update_distance_badge(a.get("facility", {}).get("marker"))
+        self.update_map_preview(a.get("facility", {}))
+
     def render_vision_items(self, items, manual_active=False):
         clear_layout(self.vision_container)
         self.analysis_placeholder = None
@@ -1403,6 +1435,122 @@ class AuctionBrowser(QMainWindow):
             return
         m = self.current["facility"]["marker"]
         webbrowser.open(f"https://www.google.com/maps?q={m['lat']},{m['lng']}")
+
+    def get_search_coordinates(self):
+        zip_code = str(SEARCH_PARAMS.get("search_term", "")).strip()
+        if not zip_code:
+            return None
+
+        if zip_code in self.zip_coord_cache:
+            return self.zip_coord_cache[zip_code]
+
+        try:
+            info = self.geocoder.query_postal_code(zip_code)
+            lat, lng = float(info.latitude), float(info.longitude)
+            if math.isnan(lat) or math.isnan(lng):
+                raise ValueError("Invalid coordinates")
+            coords = (lat, lng)
+        except Exception:
+            coords = None
+
+        self.zip_coord_cache[zip_code] = coords
+        return coords
+
+    def calculate_distance_miles(self, facility_marker):
+        if not facility_marker:
+            return None
+
+        search_coords = self.get_search_coordinates()
+        if not search_coords:
+            return None
+
+        lat1, lng1 = search_coords
+        lat2, lng2 = facility_marker.get("lat"), facility_marker.get("lng")
+
+        if None in (lat2, lng2):
+            return None
+
+        def to_radians(deg):
+            return deg * math.pi / 180
+
+        r = 3958.8  # Earth radius in miles
+        dlat = to_radians(lat2 - lat1)
+        dlng = to_radians(lng2 - lng1)
+        a = (
+            math.sin(dlat / 2) ** 2
+            + math.cos(to_radians(lat1))
+            * math.cos(to_radians(lat2))
+            * math.sin(dlng / 2) ** 2
+        )
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        return r * c
+
+    def update_distance_badge(self, facility_marker):
+        distance = self.calculate_distance_miles(facility_marker)
+        zip_code = SEARCH_PARAMS.get("search_term", "")
+
+        if distance is None:
+            self.distance_badge.setText("Distance unavailable")
+            self.distance_badge.setStyleSheet(
+                "background:#6b7280; color:white; padding:6px 10px;"
+                "border-radius:10px; font-weight:600;"
+            )
+            return
+
+        self.distance_badge.setText(f"{distance:.1f} mi from {zip_code}")
+        badge_color = "#22c55e" if distance <= 25 else "#f59e0b" if distance <= 75 else "#ef4444"
+        self.distance_badge.setStyleSheet(
+            f"background:{badge_color}; color:white; padding:6px 10px;"
+            "border-radius:10px; font-weight:600;"
+        )
+
+    def fetch_map_tile(self, url):
+        try:
+            r = requests.get(url, timeout=10)
+            if r.status_code == 200:
+                return r.content
+        except Exception:
+            return None
+        return None
+
+    def update_map_preview(self, facility):
+        marker = facility.get("marker") if facility else None
+        if not marker:
+            self.map_preview.setText("Location not available")
+            self.map_preview.setPixmap(QPixmap())
+            return
+
+        lat, lng = marker.get("lat"), marker.get("lng")
+        if lat is None or lng is None:
+            self.map_preview.setText("Location not available")
+            self.map_preview.setPixmap(QPixmap())
+            return
+
+        self.map_preview.setText("Loading map…")
+        self.map_preview.setPixmap(QPixmap())
+
+        url = (
+            "https://staticmap.openstreetmap.de/staticmap.php?"
+            f"center={lat},{lng}&zoom=13&size=300x200&markers={lat},{lng},lightblue-pushpin"
+        )
+
+        def handle(data):
+            if not data:
+                self.map_preview.setText("Map preview unavailable")
+                return
+            pix = QPixmap()
+            pix.loadFromData(data)
+            self.map_preview.setPixmap(
+                pix.scaled(
+                    self.map_preview.width(),
+                    self.map_preview.height(),
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation,
+                )
+            )
+            self.map_preview.setText("")
+
+        self.run_worker(lambda: self.fetch_map_tile(url), handle)
 
     def format_end_time(self):
         exp = (
