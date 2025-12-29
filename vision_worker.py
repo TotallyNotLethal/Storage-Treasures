@@ -133,13 +133,27 @@ class VisionWorker(QThread):
                     w = float(box.get("w", 0))
                     h = float(box.get("h", 0))
 
-                    if w <= 0 or h <= 0:
+                    if x > 1 or y > 1 or w > 1 or h > 1:
+                        x /= width
+                        y /= height
+                        w /= width
+                        h /= height
+
+                    x2 = x + w
+                    y2 = y + h
+
+                    x = max(0.0, min(1.0, x))
+                    y = max(0.0, min(1.0, y))
+                    x2 = max(0.0, min(1.0, x2))
+                    y2 = max(0.0, min(1.0, y2))
+
+                    if x2 <= x or y2 <= y:
                         continue
 
-                    left = max(0, min(width, int(x * width)))
-                    top = max(0, min(height, int(y * height)))
-                    right = max(0, min(width, int((x + w) * width)))
-                    bottom = max(0, min(height, int((y + h) * height)))
+                    left = int(x * width)
+                    top = int(y * height)
+                    right = int(x2 * width)
+                    bottom = int(y2 * height)
 
                     if right <= left or bottom <= top:
                         continue
