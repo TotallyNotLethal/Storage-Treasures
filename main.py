@@ -77,6 +77,8 @@ class AuctionBrowser(QMainWindow):
         self.threads = []
         self.image_threads = []
         self.had_vision_error = False
+        self.vision_aid_in_progress = None
+        self.analysis_placeholder = None
 
         splitter = QSplitter(Qt.Horizontal)
         self.setCentralWidget(splitter)
@@ -305,6 +307,8 @@ class AuctionBrowser(QMainWindow):
         if not self.current:
             return
 
+        aid = self.current["auction_id"]
+
         image_urls = [
             img.get("image_path_large") or img.get("image_path")
             for img in self.current.get("images", [])
@@ -315,29 +319,37 @@ class AuctionBrowser(QMainWindow):
             self.show_analysis_error("No images available for this auction.")
             return
 
+        self.vision_aid_in_progress = aid
+
+        self.lock_auction_list()
         self.btn_analyze.setEnabled(False)
-        self.btn_analyze.setText("Analyzing images...")
+        self.btn_analyze.setText("Analyzing images… (list locked)")
+        self.btn_analyze.setToolTip(
+            "Selection is locked during analysis to avoid mixing auctions."
+        )
         self.had_vision_error = False
         self.vision_status.setStyleSheet("color:#9ca3af;")
         self.vision_status.setText("Downloading and analyzing images…")
 
         clear_layout(self.vision_container)
-        placeholder = QLabel("Analyzing images... (0/%d)" % len(image_urls))
+        placeholder = QLabel(
+            "Analyzing images… (0/%d) — selection locked to prevent cross-auction updates."
+            % len(image_urls)
+        )
         placeholder.setStyleSheet("color:#9ca3af;")
+        self.analysis_placeholder = placeholder
         self.vision_container.addWidget(placeholder)
         self.vision_items_displayed = []
 
-        self.vision_worker = VisionWorker(image_urls)
+        self.vision_worker = VisionWorker(image_urls, aid)
         self.vision_worker.progress.connect(self.on_vision_progress)
         self.vision_worker.error.connect(self.on_vision_error)
         self.vision_worker.finished.connect(self.on_vision_done)
         self.vision_worker.start()
 
-    def on_vision_done(self, result):
-        if not self.current:
+    def on_vision_done(self, aid, result):
+        if aid != self.vision_aid_in_progress or not self.current:
             return
-
-        aid = self.current["auction_id"]
 
         self.vision_resale[aid] = result
         save_vision_result(aid, result)
@@ -347,17 +359,27 @@ class AuctionBrowser(QMainWindow):
 
         self.lbl_resale.setText(f"${lo:,} – ${hi:,}")
 
-        self.btn_analyze.setEnabled(True)
-        self.btn_analyze.setText("Analyze Images")
         if not self.had_vision_error:
             self.vision_status.setStyleSheet("color:#9ca3af;")
             self.vision_status.setText("")
 
         self.render_vision_items(result.get("items", []))
+        self.unlock_auction_list()
+        self.vision_aid_in_progress = None
 
-    def on_vision_progress(self, current, total, items):
-        self.btn_analyze.setText(f"Analyzing images... ({current}/{total})")
+    def on_vision_progress(self, aid, current, total, items):
+        if aid != self.vision_aid_in_progress:
+            return
+
+        self.btn_analyze.setText(
+            f"Analyzing images… (list locked) ({current}/{total})"
+        )
         self.vision_status.setText(f"Processing images ({current}/{total})…")
+
+        if self.analysis_placeholder:
+            self.analysis_placeholder.setText(
+                f"Analyzing images… ({current}/{total}) — selection locked to prevent cross-auction updates."
+            )
 
         new_items = items[len(self.vision_items_displayed):]
         if not new_items:
@@ -368,14 +390,19 @@ class AuctionBrowser(QMainWindow):
             if isinstance(w, QLabel) and "Analyzing images" in w.text():
                 self.vision_container.removeWidget(w)
                 w.deleteLater()
+                self.analysis_placeholder = None
 
         self.append_vision_items(new_items)
         self.vision_items_displayed.extend(new_items)
 
-    def on_vision_error(self, message):
+    def on_vision_error(self, aid, message):
+        if aid != self.vision_aid_in_progress:
+            return
         self.vision_status.setStyleSheet("color:#ef4444;")
         self.vision_status.setText(message)
         self.had_vision_error = True
+        self.unlock_auction_list()
+        self.vision_aid_in_progress = None
 
     def show_analysis_error(self, message):
         self.vision_status.setStyleSheet("color:#ef4444;")
@@ -559,6 +586,7 @@ class AuctionBrowser(QMainWindow):
 
     def render_vision_items(self, items):
         clear_layout(self.vision_container)
+        self.analysis_placeholder = None
         self.vision_items_displayed = []
 
         if not items:
@@ -569,6 +597,21 @@ class AuctionBrowser(QMainWindow):
 
         self.append_vision_items(items)
         self.vision_items_displayed = list(items)
+
+    def lock_auction_list(self):
+        self.list.setEnabled(False)
+        self.list.setContextMenuPolicy(Qt.NoContextMenu)
+        self.list.setToolTip(
+            "Selection is temporarily disabled while image analysis runs."
+        )
+
+    def unlock_auction_list(self):
+        self.list.setEnabled(True)
+        self.list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list.setToolTip("")
+        self.btn_analyze.setEnabled(True)
+        self.btn_analyze.setText("Analyze Images")
+        self.btn_analyze.setToolTip("Analyze images to estimate resale value.")
 
     def append_vision_items(self, items):
         for it in items:
