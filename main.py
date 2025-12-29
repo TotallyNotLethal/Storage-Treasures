@@ -521,11 +521,31 @@ class AuctionBrowser(QMainWindow):
             low = float(it.get("low", 0))
             high = float(it.get("high", 0))
 
-            row = QLabel(
-                f"<b>{name}</b> — {brand} • Confidence: {conf*100:.0f}% • "
-                f"${low:,.0f}–${high:,.0f}"
+            if conf >= 0.8:
+                badge_label, badge_color = "High", "#22c55e"
+            elif conf >= 0.5:
+                badge_label, badge_color = "Medium", "#eab308"
+            else:
+                badge_label, badge_color = "Low", "#ef4444"
+
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(8)
+
+            badge = QLabel(f"{badge_label} • {conf*100:.0f}%")
+            badge.setStyleSheet(
+                "color:white; padding:2px 8px; border-radius:8px; font-weight:600;"
+                f"background:{badge_color};"
             )
-            row.setWordWrap(True)
+
+            info = QLabel(
+                f"<b>{name}</b> — {brand} • ${low:,.0f}–${high:,.0f}"
+            )
+            info.setWordWrap(True)
+
+            row_layout.addWidget(badge)
+            row_layout.addWidget(info, 1)
             self.vision_container.addWidget(row)
 
     # ================= TIMER =================
