@@ -615,7 +615,7 @@ class AuctionBrowser(QMainWindow):
             lo = result.get("total_low", 0)
             hi = result.get("total_high", 0)
 
-            self.lbl_resale.setText(f"${lo:,} – ${hi:,}")
+            self.update_totals_display({"low": lo, "high": hi})
             self.vision_status.setStyleSheet("color:#9ca3af;")
             self.vision_status.setText("")
             self.render_vision_items(result.get("items", []))
@@ -1160,6 +1160,26 @@ class AuctionBrowser(QMainWindow):
         lo = float(totals.get("low", 0))
         hi = float(totals.get("high", 0))
         self.lbl_resale.setText(f"${lo:,.0f} – ${hi:,.0f}")
+        self.update_profit_ratio_display(totals)
+
+    def update_profit_ratio_display(self, totals=None):
+        if not self.current:
+            self.lbl_score.setText("--")
+            return
+
+        current_bid = float(self.current.get("current_bid", {}).get("amount") or 0)
+        lo = float(totals.get("low", 0) if totals else 0)
+        hi = float(totals.get("high", 0) if totals else 0)
+
+        if totals and current_bid > 0:
+            low_ratio = lo / current_bid
+            high_ratio = hi / current_bid
+            self.lbl_score.setText(f"{low_ratio:.1f}x – {high_ratio:.1f}x")
+            return
+
+        vel = bid_velocity(self.current.get("auction_id"))
+        score = profit_score(self.current, vel)
+        self.lbl_score.setText(f"{score}/100")
 
     def append_vision_items(self, items):
         for it in items:
