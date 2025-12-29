@@ -5,7 +5,7 @@ from vision_gpt import analyze_image
 from vision_cache import image_hash, get_cached, set_cached
 
 class VisionWorker(QThread):
-    progress = Signal(int, int)
+    progress = Signal(int, int, list)
     finished = Signal(dict)
 
     def __init__(self, images):
@@ -19,7 +19,9 @@ class VisionWorker(QThread):
         seen_names = []
         seen_keys = set()
 
-        for img_bytes in self.images:
+        total = len(self.images)
+
+        for idx, img_bytes in enumerate(self.images, start=1):
             result = analyze_image(img_bytes, seen_items=seen_names)
             items = result.get("items", [])
 
@@ -45,6 +47,8 @@ class VisionWorker(QThread):
                     seen_names.append(name)
 
                 all_items.append(it)
+
+            self.progress.emit(idx, total, list(all_items))
 
         self.result = {
             "items": all_items,
