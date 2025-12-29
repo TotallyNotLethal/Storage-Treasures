@@ -199,8 +199,18 @@ class AuctionBrowser(QMainWindow):
         self.btn_analyze = QPushButton("Analyze Images")
         self.btn_analyze.clicked.connect(self.analyze_images)
         self.card_images.layout.insertWidget(0, self.btn_analyze)
-        
+
+        self.vision_title = QLabel("Vision Breakdown")
+        self.vision_title.setStyleSheet("font-weight:600;")
+        self.card_images.layout.addWidget(self.vision_title)
+
+        self.vision_container = QVBoxLayout()
+        self.vision_container.setSpacing(4)
+        self.card_images.layout.addLayout(self.vision_container)
+
         self.card_images.layout.addLayout(self.image_grid)
+
+        self.render_vision_items([])
 
         # ---- ACTIONS ----
         actions = QHBoxLayout()
@@ -323,6 +333,8 @@ class AuctionBrowser(QMainWindow):
         self.btn_analyze.setEnabled(True)
         self.btn_analyze.setText("Analyze Images")
 
+        self.render_vision_items(result.get("items", []))
+
 
     # ================= LIST / FILTER =================
     def populate_list(self, auctions):
@@ -436,14 +448,19 @@ class AuctionBrowser(QMainWindow):
             res = self.vision_resale[aid]
             lo = res.get("total_low", 0)
             hi = res.get("total_high", 0)
+            self.render_vision_items(res.get("items", []))
+        else:
+            self.render_vision_items([])
 
         self.title.setText(a["facility_name"])
         self.subtitle.setText(f"{a['address']} • {a['city']} {a['state']}")
 
         self.lbl_score.setText(f"{score}/100")
         self.lbl_velocity.setText(f"{vel:.2f}/hr")
-        #if lo is not None and hi is not None:
-        #    self.lbl_resale.setText(f"${lo:,} – ${hi:,}")
+        if lo is not None and hi is not None:
+            self.lbl_resale.setText(f"${lo:,} – ${hi:,}")
+        else:
+            self.lbl_resale.setText("--")
 
         clear_layout(self.card_details.layout)
         clear_layout(self.image_grid)
@@ -487,6 +504,29 @@ class AuctionBrowser(QMainWindow):
             if c == 3:
                 c = 0
                 r += 1
+
+    def render_vision_items(self, items):
+        clear_layout(self.vision_container)
+
+        if not items:
+            placeholder = QLabel("Analyze images to see itemized estimates.")
+            placeholder.setStyleSheet("color:#9ca3af;")
+            self.vision_container.addWidget(placeholder)
+            return
+
+        for it in items:
+            name = it.get("name") or "Unknown item"
+            brand = it.get("brand") or "Unknown brand"
+            conf = float(it.get("confidence", 0))
+            low = float(it.get("low", 0))
+            high = float(it.get("high", 0))
+
+            row = QLabel(
+                f"<b>{name}</b> — {brand} • Confidence: {conf*100:.0f}% • "
+                f"${low:,.0f}–${high:,.0f}"
+            )
+            row.setWordWrap(True)
+            self.vision_container.addWidget(row)
 
     # ================= TIMER =================
     def update_countdown(self):
