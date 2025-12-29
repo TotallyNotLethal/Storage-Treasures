@@ -7,12 +7,17 @@ from vision_cache import image_hash, get_cached, set_cached
 class VisionWorker(QThread):
     progress = Signal(str, int, int, list)
     error = Signal(str, str)
+    cancelled = Signal(str)
     finished = Signal(str, dict)
 
     def __init__(self, image_urls, auction_id):
         super().__init__()
         self.image_urls = image_urls
         self.auction_id = auction_id
+        self._cancel_requested = False
+
+    def request_cancel(self):
+        self._cancel_requested = True
 
     def run(self):
         total_low = 0
@@ -24,6 +29,10 @@ class VisionWorker(QThread):
         total = len(self.image_urls)
 
         for idx, url in enumerate(self.image_urls, start=1):
+            if self._cancel_requested:
+                self.cancelled.emit(self.auction_id)
+                return
+
             img_bytes = None
 
             try:
@@ -63,7 +72,15 @@ class VisionWorker(QThread):
 
                     all_items.append(it)
 
+            if self._cancel_requested:
+                self.cancelled.emit(self.auction_id)
+                return
+
             self.progress.emit(self.auction_id, idx, total, list(all_items))
+
+        if self._cancel_requested:
+            self.cancelled.emit(self.auction_id)
+            return
 
         self.result = {
             "items": all_items,
