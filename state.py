@@ -3,6 +3,8 @@ class AppState:
     def __init__(self):
         self.watchlist = set()
         self.refresh_seconds = 30
+        # aid -> {url: {"index": int, "items": list, "url": str, "annotated": str|None}}
+        self.vision_image_summaries = {}
         
 class SearchState:
     def __init__(self):

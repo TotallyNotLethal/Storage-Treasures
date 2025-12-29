@@ -1,4 +1,4 @@
-import sys, json, requests, sqlite3, webbrowser, csv
+import sys, json, requests, sqlite3, webbrowser, csv, base64
 from datetime import datetime, timezone
 from vision_worker import VisionWorker
 
@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QListWidget, QListWidgetItem,
     QLabel, QVBoxLayout, QHBoxLayout, QScrollArea, QPushButton,
     QFileDialog, QSplitter, QFrame, QGridLayout,
-    QLineEdit, QComboBox, QSlider, QMenu
+    QLineEdit, QComboBox, QSlider, QMenu, QDialog, QDialogButtonBox
 )
 from PySide6.QtGui import QPixmap, QFont
 
@@ -59,6 +59,18 @@ class ImageLoader(QThread):
         except Exception:
             pass
 
+
+class ClickableLabel(QLabel):
+    clicked = Signal(object)
+
+    def __init__(self, payload=None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.payload = payload or {}
+
+    def mousePressEvent(self, event):
+        self.clicked.emit(self.payload)
+        super().mousePressEvent(event)
+
 # ================= MAIN =================
 class AuctionBrowser(QMainWindow):
     def __init__(self):
@@ -83,6 +95,7 @@ class AuctionBrowser(QMainWindow):
         self.analysis_placeholder = None
         self.vision_worker = None
         self.recent_vision_results = []
+        self.image_tile_map = {}
 
         splitter = QSplitter(Qt.Horizontal)
         self.setCentralWidget(splitter)
@@ -331,14 +344,20 @@ class AuctionBrowser(QMainWindow):
         
     def on_image_loaded(self, pix, label):
         label.setText("")
-        label.setPixmap(
-            pix.scaled(
-                220, 220,
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation
+        url = getattr(label, "payload", {}).get("url")
+        if url:
+            meta = self.image_tile_map.get(url, {})
+            meta["base_pixmap"] = pix
+            self.image_tile_map[url] = meta
+            self.set_label_pixmap(url, pix)
+        else:
+            label.setPixmap(
+                pix.scaled(
+                    220, 220,
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation
+                )
             )
-        )
-        label.mousePressEvent = lambda e, p=pix: ImageViewer(p).exec()
 
     def on_score_slider(self, value):
         color = "#22c55e" if value >= 70 else "#f59e0b" if value >= 40 else "#ef4444"
@@ -388,6 +407,10 @@ class AuctionBrowser(QMainWindow):
             or "this auction"
         )
         self.set_analysis_active(True, auction_name)
+
+        # Reset per-image summaries for this auction
+        self.state.vision_image_summaries[aid] = {}
+        self.set_all_image_statuses("Analyzing…", "#0ea5e9")
 
         self.lock_auction_list()
         self.btn_analyze.setEnabled(False)
@@ -458,7 +481,7 @@ class AuctionBrowser(QMainWindow):
         self.unlock_auction_list()
         self.vision_aid_in_progress = None
 
-    def on_vision_progress(self, aid, current, total, items):
+    def on_vision_progress(self, aid, current, total, items, image_idx, image_url, image_items, annotated_image):
         if aid != self.vision_aid_in_progress:
             return
 
@@ -473,18 +496,31 @@ class AuctionBrowser(QMainWindow):
             )
 
         new_items = items[len(self.vision_items_displayed):]
-        if not new_items:
-            return
+        if new_items:
+            if self.vision_container.count() == 1:
+                w = self.vision_container.itemAt(0).widget()
+                if isinstance(w, QLabel) and "Analyzing images" in w.text():
+                    self.vision_container.removeWidget(w)
+                    w.deleteLater()
+                    self.analysis_placeholder = None
 
-        if self.vision_container.count() == 1:
-            w = self.vision_container.itemAt(0).widget()
-            if isinstance(w, QLabel) and "Analyzing images" in w.text():
-                self.vision_container.removeWidget(w)
-                w.deleteLater()
-                self.analysis_placeholder = None
+            self.append_vision_items(new_items)
+            self.vision_items_displayed.extend(new_items)
 
-        self.append_vision_items(new_items)
-        self.vision_items_displayed.extend(new_items)
+        if image_url:
+            self.store_image_items(aid, image_url, image_idx, image_items, annotated_image)
+            if image_items:
+                label = f"Analyzed ({len(image_items)} items)"
+                color = "#22c55e"
+            else:
+                label = "Analyzed (no items)"
+                color = "#6b7280"
+            self.set_image_status(image_url, label, color)
+
+            if annotated_image:
+                pix = QPixmap()
+                pix.loadFromData(annotated_image)
+                self.set_label_pixmap(image_url, pix, is_annotated=True)
 
     def on_vision_cancelled(self, aid):
         if aid != self.vision_aid_in_progress:
@@ -492,6 +528,7 @@ class AuctionBrowser(QMainWindow):
         self.analysis_cancelled = True
         self.vision_status.setStyleSheet("color:#9ca3af;")
         self.vision_status.setText("Analysis canceled; no results saved.")
+        self.set_all_image_statuses("Canceled", "#ef4444")
         self.render_vision_items([])
         self.vision_worker = None
         self.set_analysis_active(False)
@@ -504,6 +541,7 @@ class AuctionBrowser(QMainWindow):
         self.vision_status.setStyleSheet("color:#ef4444;")
         self.vision_status.setText(message)
         self.had_vision_error = True
+        self.set_all_image_statuses("Error", "#ef4444")
         self.set_analysis_active(False)
         self.unlock_auction_list()
         self.vision_aid_in_progress = None
@@ -678,6 +716,7 @@ class AuctionBrowser(QMainWindow):
 
         clear_layout(self.card_details.layout)
         clear_layout(self.image_grid)
+        self.image_tile_map = {}
 
         def row(k, v):
             self.card_details.layout.addWidget(QLabel(f"<b>{k}</b>: {v}"))
@@ -697,27 +736,52 @@ class AuctionBrowser(QMainWindow):
         self.card_details.layout.addWidget(lbl)
 
         r = c = 0
-        for img in a.get("images", []):
+        for idx, img in enumerate(a.get("images", []), start=1):
             url = img.get("image_path_large") or img.get("image_path")
             if not url:
                 continue
-    
-            lbl = QLabel("Loading…")
+
+            tile = QFrame()
+            tile_layout = QVBoxLayout(tile)
+            tile_layout.setContentsMargins(4, 4, 4, 4)
+            tile_layout.setSpacing(6)
+
+            lbl = ClickableLabel({"url": url, "index": idx})
+            lbl.clicked.connect(self.on_image_clicked)
             lbl.setAlignment(Qt.AlignCenter)
             lbl.setFixedSize(220, 220)
             lbl.setStyleSheet("color:#9ca3af; border:1px dashed #1f2937;")
-            self.image_grid.addWidget(lbl, r, c)
-    
+            lbl.setText("Loading…")
+
+            status = QLabel("Not analyzed")
+            status.setAlignment(Qt.AlignCenter)
+            status.setStyleSheet(
+                "color:#9ca3af; padding:2px 6px; border-radius:8px;"
+                "background:#111827; font-size:11px;"
+            )
+
+            tile_layout.addWidget(lbl)
+            tile_layout.addWidget(status)
+            self.image_grid.addWidget(tile, r, c)
+
+            self.image_tile_map[url] = {
+                "label": lbl,
+                "status": status,
+                "index": idx,
+            }
+
             loader = ImageLoader(url, lbl)
             loader.loaded.connect(self.on_image_loaded)
             self.image_threads.append(loader)
             loader.finished.connect(lambda l=loader: self.image_threads.remove(l))
             loader.start()
-    
+
             c += 1
             if c == 3:
                 c = 0
                 r += 1
+
+        self.apply_image_summaries(aid)
 
     def render_vision_items(self, items):
         clear_layout(self.vision_container)
@@ -732,6 +796,67 @@ class AuctionBrowser(QMainWindow):
 
         self.append_vision_items(items)
         self.vision_items_displayed = list(items)
+
+    def apply_image_summaries(self, aid):
+        summaries = self.state.vision_image_summaries.get(aid)
+        if not summaries:
+            return
+
+        for url, info in summaries.items():
+            items = info.get("items", [])
+            if items:
+                label = f"Analyzed ({len(items)} items)"
+                color = "#22c55e"
+            else:
+                label = "Analyzed (no items)"
+                color = "#6b7280"
+            self.set_image_status(url, label, color)
+
+            annotated = info.get("annotated")
+            if annotated:
+                try:
+                    data = base64.b64decode(annotated)
+                    pix = QPixmap()
+                    pix.loadFromData(data)
+                    self.set_label_pixmap(url, pix, is_annotated=True)
+                except Exception:
+                    pass
+
+    def set_label_pixmap(self, url, pixmap, is_annotated=False):
+        meta = self.image_tile_map.get(url)
+        if not meta:
+            return
+
+        if is_annotated:
+            meta["annotated_pixmap"] = pixmap
+        else:
+            meta["base_pixmap"] = pixmap
+
+        self.image_tile_map[url] = meta
+
+        label = meta.get("label")
+        if not label:
+            return
+
+        active = meta.get("annotated_pixmap") or meta.get("base_pixmap")
+        if not active:
+            return
+
+        label.setPixmap(
+            active.scaled(
+                220,
+                220,
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
+            )
+        )
+
+        def handler(event, p=active, lbl=label):
+            lbl.clicked.emit(lbl.payload)
+            if p:
+                ImageViewer(p).exec()
+
+        label.mousePressEvent = handler
 
     def set_analysis_active(self, active, auction_name=""):
         self.card_details.setEnabled(not active)
@@ -768,6 +893,82 @@ class AuctionBrowser(QMainWindow):
         for it in items:
             row = self.build_vision_row(it)
             self.vision_container.addWidget(row)
+
+    def set_all_image_statuses(self, text, color):
+        for url in self.image_tile_map.keys():
+            self.set_image_status(url, text, color)
+
+    def set_image_status(self, url, text, color):
+        meta = self.image_tile_map.get(url)
+        if not meta:
+            return
+        lbl = meta.get("status")
+        if not lbl:
+            return
+        lbl.setText(text)
+        lbl.setStyleSheet(
+            "color:white; padding:2px 6px; border-radius:8px;"
+            f"background:{color}; font-size:11px;"
+        )
+
+    def store_image_items(self, aid, url, index, items, annotated_bytes=None):
+        if not url:
+            return
+        if aid not in self.state.vision_image_summaries:
+            self.state.vision_image_summaries[aid] = {}
+
+        existing = self.state.vision_image_summaries[aid].get(url, {})
+
+        self.state.vision_image_summaries[aid][url] = {
+            "index": index,
+            "url": url,
+            "items": items or [],
+            "annotated": base64.b64encode(annotated_bytes).decode("utf-8")
+            if annotated_bytes
+            else existing.get("annotated"),
+        }
+
+    def on_image_clicked(self, payload):
+        if not payload or not self.current:
+            return
+
+        url = payload.get("url")
+        aid = self.current.get("auction_id")
+        if not url or not aid:
+            return
+
+        summary = self.state.vision_image_summaries.get(aid, {}).get(url, {})
+        items = summary.get("items", [])
+        self.show_image_dialog(url, items)
+
+    def show_image_dialog(self, url, items):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Image analysis details")
+        layout = QVBoxLayout(dlg)
+
+        info = QLabel(f"<b>Image</b>: {url}")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        if not items:
+            layout.addWidget(QLabel("No analysis available yet for this image."))
+        else:
+            for it in items:
+                name = it.get("name") or "Unknown"
+                brand = it.get("brand") or "Unknown brand"
+                conf = float(it.get("confidence", 0)) * 100
+                low = float(it.get("low", 0))
+                high = float(it.get("high", 0))
+                line = QLabel(
+                    f"• <b>{name}</b> — {brand} | {conf:.0f}% | ${low:,.0f}-${high:,.0f}"
+                )
+                line.setWordWrap(True)
+                layout.addWidget(line)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok)
+        buttons.accepted.connect(dlg.accept)
+        layout.addWidget(buttons)
+        dlg.exec()
 
     def build_vision_row(self, it):
         name = it.get("name") or "Unknown item"
