@@ -76,6 +76,7 @@ class AuctionBrowser(QMainWindow):
         self.current = None
         self.threads = []
         self.image_threads = []
+        self.had_vision_error = False
 
         splitter = QSplitter(Qt.Horizontal)
         self.setCentralWidget(splitter)
@@ -211,6 +212,10 @@ class AuctionBrowser(QMainWindow):
         self.vision_title.setStyleSheet("font-weight:600;")
         self.card_images.layout.addWidget(self.vision_title)
 
+        self.vision_status = QLabel()
+        self.vision_status.setStyleSheet("color:#9ca3af;")
+        self.card_images.layout.addWidget(self.vision_status)
+
         self.vision_container = QVBoxLayout()
         self.vision_container.setSpacing(4)
         self.vision_items_displayed = []
@@ -300,35 +305,31 @@ class AuctionBrowser(QMainWindow):
         if not self.current:
             return
 
-        image_bytes = []
+        image_urls = [
+            img.get("image_path_large") or img.get("image_path")
+            for img in self.current.get("images", [])
+            if img.get("image_path_large") or img.get("image_path")
+        ]
 
-        for img in self.current.get("images", []):
-            url = img.get("image_path_large") or img.get("image_path")
-            if not url:
-                continue
-
-            try:
-                r = requests.get(url, timeout=10)
-                r.raise_for_status()
-                image_bytes.append(r.content)
-            except Exception as e:
-                print("Image fetch failed:", e)
-
-        if not image_bytes:
+        if not image_urls:
+            self.show_analysis_error("No images available for this auction.")
             return
 
         self.btn_analyze.setEnabled(False)
         self.btn_analyze.setText("Analyzing images...")
+        self.had_vision_error = False
+        self.vision_status.setStyleSheet("color:#9ca3af;")
+        self.vision_status.setText("Downloading and analyzing images…")
 
         clear_layout(self.vision_container)
-        placeholder = QLabel("Analyzing images... (0/%d)" % len(image_bytes))
+        placeholder = QLabel("Analyzing images... (0/%d)" % len(image_urls))
         placeholder.setStyleSheet("color:#9ca3af;")
         self.vision_container.addWidget(placeholder)
         self.vision_items_displayed = []
 
-        # ✅ pass BYTES, not URLs
-        self.vision_worker = VisionWorker(image_bytes)
+        self.vision_worker = VisionWorker(image_urls)
         self.vision_worker.progress.connect(self.on_vision_progress)
+        self.vision_worker.error.connect(self.on_vision_error)
         self.vision_worker.finished.connect(self.on_vision_done)
         self.vision_worker.start()
 
@@ -348,11 +349,15 @@ class AuctionBrowser(QMainWindow):
 
         self.btn_analyze.setEnabled(True)
         self.btn_analyze.setText("Analyze Images")
+        if not self.had_vision_error:
+            self.vision_status.setStyleSheet("color:#9ca3af;")
+            self.vision_status.setText("")
 
         self.render_vision_items(result.get("items", []))
 
     def on_vision_progress(self, current, total, items):
         self.btn_analyze.setText(f"Analyzing images... ({current}/{total})")
+        self.vision_status.setText(f"Processing images ({current}/{total})…")
 
         new_items = items[len(self.vision_items_displayed):]
         if not new_items:
@@ -366,6 +371,16 @@ class AuctionBrowser(QMainWindow):
 
         self.append_vision_items(new_items)
         self.vision_items_displayed.extend(new_items)
+
+    def on_vision_error(self, message):
+        self.vision_status.setStyleSheet("color:#ef4444;")
+        self.vision_status.setText(message)
+        self.had_vision_error = True
+
+    def show_analysis_error(self, message):
+        self.vision_status.setStyleSheet("color:#ef4444;")
+        self.vision_status.setText(message)
+        self.had_vision_error = True
 
 
     # ================= LIST / FILTER =================
