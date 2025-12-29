@@ -157,6 +157,7 @@ class AuctionBrowser(QMainWindow):
         self.score_slider = QSlider(Qt.Horizontal)
         self.score_slider.setRange(0, 100)
         self.score_slider.setValue(0)
+        self.score_slider.setToolTip("Only show auctions with a profit/risk score at or above this threshold.")
         fl.addWidget(self.score_slider)
 
         fl.addSpacing(6)
@@ -165,7 +166,15 @@ class AuctionBrowser(QMainWindow):
         self.time_slider = QSlider(Qt.Horizontal)
         self.time_slider.setRange(0, 72)
         self.time_slider.setValue(72)
+        self.time_slider.setToolTip("Only show auctions ending within this many hours.")
         fl.addWidget(self.time_slider)
+
+        helper_label = QLabel(
+            "Filters limit the auctions shown below based on profit score and hours remaining."
+        )
+        helper_label.setStyleSheet("color:#9ca3af; font-size:12px;")
+        helper_label.setWordWrap(True)
+        fl.addWidget(helper_label)
 
         self.score_slider.valueChanged.connect(self.on_score_slider)
         self.time_slider.valueChanged.connect(self.on_time_slider)
@@ -177,6 +186,9 @@ class AuctionBrowser(QMainWindow):
         recent_layout.setContentsMargins(0, 0, 0, 0)
         self.recent_list = QListWidget()
         self.recent_list.setFixedHeight(140)
+        self.recent_list.setToolTip(
+            "Cached analyses open immediately without reprocessing images."
+        )
         self.recent_list.itemClicked.connect(self.load_cached_analysis)
         recent_layout.addWidget(self.recent_list)
         self.recent_card.layout.addLayout(recent_layout)
@@ -358,9 +370,11 @@ class AuctionBrowser(QMainWindow):
         controls = QHBoxLayout()
         controls.setSpacing(8)
         self.btn_analyze = QPushButton("Analyze Images")
+        self.btn_analyze.setToolTip("Analyze images to estimate resale value.")
         self.btn_analyze.clicked.connect(self.analyze_images)
         self.btn_cancel_analyze = QPushButton("Cancel analysis")
         self.btn_cancel_analyze.setVisible(False)
+        self.btn_cancel_analyze.setToolTip("Stop the current image analysis run.")
         self.btn_cancel_analyze.clicked.connect(self.cancel_analysis)
         controls.addWidget(self.btn_analyze)
         controls.addWidget(self.btn_cancel_analyze)
