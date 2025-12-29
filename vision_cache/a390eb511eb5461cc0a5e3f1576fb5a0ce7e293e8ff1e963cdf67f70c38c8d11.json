@@ -1,0 +1,18 @@
+{
+  "items": [
+    {
+      "name": "Mattress",
+      "brand": "",
+      "confidence": 0.8,
+      "low": 50,
+      "high": 150
+    },
+    {
+      "name": "Wooden Cabinet",
+      "brand": "",
+      "confidence": 0.6,
+      "low": 100,
+      "high": 300
+    }
+  ]
+}

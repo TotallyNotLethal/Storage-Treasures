@@ -1,0 +1,39 @@
+{
+  "items": [
+    {
+      "name": "Table",
+      "brand": "",
+      "confidence": 0.7,
+      "low": 50,
+      "high": 150
+    },
+    {
+      "name": "Storage unit panels",
+      "brand": "",
+      "confidence": 0.6,
+      "low": 20,
+      "high": 80
+    },
+    {
+      "name": "Metal sheet",
+      "brand": "",
+      "confidence": 0.5,
+      "low": 10,
+      "high": 30
+    },
+    {
+      "name": "Cabinet",
+      "brand": "",
+      "confidence": 0.7,
+      "low": 40,
+      "high": 120
+    },
+    {
+      "name": "Wooden boards",
+      "brand": "",
+      "confidence": 0.5,
+      "low": 15,
+      "high": 50
+    }
+  ]
+}
