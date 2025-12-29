@@ -173,6 +173,21 @@ class AuctionBrowser(QMainWindow):
         self.header.layout.addWidget(self.title)
         self.header.layout.addWidget(self.subtitle)
 
+        # Inline banner for analysis lock state (hidden by default)
+        self.analysis_banner = QFrame()
+        self.analysis_banner.setStyleSheet(
+            "background: rgba(15, 23, 42, 0.7); color: white;"
+            "padding: 10px; border-radius: 10px;"
+        )
+        banner_layout = QHBoxLayout(self.analysis_banner)
+        banner_layout.setContentsMargins(10, 6, 10, 6)
+        banner_layout.setSpacing(10)
+        self.analysis_label = QLabel()
+        self.analysis_label.setWordWrap(True)
+        banner_layout.addWidget(self.analysis_label)
+        self.analysis_banner.setVisible(False)
+        self.main.addWidget(self.analysis_banner)
+
         # ---- KPIs ----
         kpi = QGridLayout()
         self.main.addLayout(kpi)
@@ -320,6 +335,12 @@ class AuctionBrowser(QMainWindow):
             return
 
         self.vision_aid_in_progress = aid
+        auction_name = (
+            self.current.get("facility_name")
+            or self.current.get("facility", {}).get("name")
+            or "this auction"
+        )
+        self.set_analysis_active(True, auction_name)
 
         self.lock_auction_list()
         self.btn_analyze.setEnabled(False)
@@ -364,6 +385,7 @@ class AuctionBrowser(QMainWindow):
             self.vision_status.setText("")
 
         self.render_vision_items(result.get("items", []))
+        self.set_analysis_active(False)
         self.unlock_auction_list()
         self.vision_aid_in_progress = None
 
@@ -401,6 +423,7 @@ class AuctionBrowser(QMainWindow):
         self.vision_status.setStyleSheet("color:#ef4444;")
         self.vision_status.setText(message)
         self.had_vision_error = True
+        self.set_analysis_active(False)
         self.unlock_auction_list()
         self.vision_aid_in_progress = None
 
@@ -507,6 +530,7 @@ class AuctionBrowser(QMainWindow):
             return
 
         a = payload["auction"]
+        self.set_analysis_active(False)
         save_bid(a)
         self.current = a
 
@@ -597,6 +621,19 @@ class AuctionBrowser(QMainWindow):
 
         self.append_vision_items(items)
         self.vision_items_displayed = list(items)
+
+    def set_analysis_active(self, active, auction_name=""):
+        self.card_details.setEnabled(not active)
+        self.card_images.setEnabled(not active)
+        if active:
+            name = auction_name or self.title.text() or "this auction"
+            self.analysis_label.setText(
+                f"Analyzing {name} — switching is disabled until completion."
+            )
+            self.analysis_banner.setVisible(True)
+        else:
+            self.analysis_label.clear()
+            self.analysis_banner.setVisible(False)
 
     def lock_auction_list(self):
         self.list.setEnabled(False)
