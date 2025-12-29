@@ -1,11 +1,13 @@
 from PySide6.QtCore import QThread, Signal
 import requests
+from io import BytesIO
+from PIL import Image, ImageDraw, ImageFont
 
 from vision_gpt import analyze_image
-from vision_cache import image_hash, get_cached, set_cached
 
 class VisionWorker(QThread):
-    progress = Signal(str, int, int, list)
+    # progress: aid, current index, total, all_items, image_index, image_url, image_items, annotated_image_bytes
+    progress = Signal(str, int, int, list, int, str, list, object)
     error = Signal(str, str)
     cancelled = Signal(str)
     finished = Signal(str, dict)
@@ -45,9 +47,15 @@ class VisionWorker(QThread):
                     f"Failed to fetch image {idx}/{total}: {e}",
                 )
 
+            image_items = []
+
+            annotated_bytes = None
+
             if img_bytes:
                 result = analyze_image(img_bytes, seen_items=seen_names)
                 items = result.get("items", [])
+                image_items = list(items)
+                annotated_bytes = self._annotate_image(img_bytes, image_items)
 
                 for it in items:
                     low = float(it.get("low", 0))
@@ -76,7 +84,16 @@ class VisionWorker(QThread):
                 self.cancelled.emit(self.auction_id)
                 return
 
-            self.progress.emit(self.auction_id, idx, total, list(all_items))
+            self.progress.emit(
+                self.auction_id,
+                idx,
+                total,
+                list(all_items),
+                idx,
+                url,
+                image_items,
+                annotated_bytes,
+            )
 
         if self._cancel_requested:
             self.cancelled.emit(self.auction_id)
@@ -89,4 +106,57 @@ class VisionWorker(QThread):
         }
 
         self.finished.emit(self.auction_id, self.result)
+
+    def _annotate_image(self, image_bytes, items):
+        try:
+            with Image.open(BytesIO(image_bytes)) as im:
+                draw = ImageDraw.Draw(im)
+                width, height = im.size
+
+                colors = [
+                    "#22c55e",
+                    "#f59e0b",
+                    "#3b82f6",
+                    "#ef4444",
+                    "#a855f7",
+                ]
+
+                try:
+                    font = ImageFont.truetype("DejaVuSans.ttf", max(14, width // 80))
+                except Exception:
+                    font = ImageFont.load_default()
+
+                for i, it in enumerate(items):
+                    box = it.get("box") or {}
+                    x = float(box.get("x", 0))
+                    y = float(box.get("y", 0))
+                    w = float(box.get("w", 0))
+                    h = float(box.get("h", 0))
+
+                    if w <= 0 or h <= 0:
+                        continue
+
+                    left = max(0, min(width, int(x * width)))
+                    top = max(0, min(height, int(y * height)))
+                    right = max(0, min(width, int((x + w) * width)))
+                    bottom = max(0, min(height, int((y + h) * height)))
+
+                    if right <= left or bottom <= top:
+                        continue
+
+                    color = colors[i % len(colors)]
+                    draw.rectangle([left, top, right, bottom], outline=color, width=max(2, width // 200))
+
+                    label = it.get("name") or "Object"
+                    text_w, text_h = draw.textsize(label, font=font)
+                    pad = 4
+                    rect = [left, max(0, top - text_h - pad * 2), left + text_w + pad * 2, top]
+                    draw.rectangle(rect, fill=color)
+                    draw.text((left + pad, rect[1] + pad), label, fill="white", font=font)
+
+                out = BytesIO()
+                im.save(out, format="PNG")
+                return out.getvalue()
+        except Exception:
+            return None
 
