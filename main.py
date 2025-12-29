@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QLabel, QVBoxLayout, QHBoxLayout, QScrollArea, QPushButton,
     QFileDialog, QSplitter, QFrame, QGridLayout,
     QLineEdit, QComboBox, QSlider, QMenu, QDialog, QDialogButtonBox,
-    QMessageBox,
+    QMessageBox, QDoubleSpinBox,
 )
 from PySide6.QtGui import QPixmap, QFont, QPdfWriter, QPainter, QPageSize
 
@@ -21,6 +21,7 @@ from db import (
     save_vision_result,
     load_vision_result,
     get_recent_vision_results,
+    reset_manual_vision_result,
 )
 from scoring import profit_score
 from alerts import SniperAlerts
@@ -97,6 +98,7 @@ class AuctionBrowser(QMainWindow):
         self.vision_worker = None
         self.recent_vision_results = []
         self.image_tile_map = {}
+        self.using_manual = False
 
         splitter = QSplitter(Qt.Horizontal)
         self.setCentralWidget(splitter)
@@ -261,9 +263,18 @@ class AuctionBrowser(QMainWindow):
         controls.addStretch()
         self.card_images.layout.insertLayout(0, controls)
 
+        vision_header = QHBoxLayout()
+        vision_header.setContentsMargins(0, 0, 0, 0)
         self.vision_title = QLabel("Vision Breakdown")
         self.vision_title.setStyleSheet("font-weight:600;")
-        self.card_images.layout.addWidget(self.vision_title)
+        vision_header.addWidget(self.vision_title)
+
+        self.btn_reset_ai = QPushButton("Reset to AI output")
+        self.btn_reset_ai.setVisible(False)
+        self.btn_reset_ai.clicked.connect(self.reset_manual_overrides)
+        vision_header.addStretch()
+        vision_header.addWidget(self.btn_reset_ai)
+        self.card_images.layout.addLayout(vision_header)
 
         self.vision_status = QLabel()
         self.vision_status.setStyleSheet("color:#9ca3af;")
@@ -458,6 +469,9 @@ class AuctionBrowser(QMainWindow):
 
         if clean_run:
             self.vision_resale[aid] = result
+            self.vision_resale[aid].pop("manual_items", None)
+            self.vision_resale[aid].pop("manual_total_low", None)
+            self.vision_resale[aid].pop("manual_total_high", None)
             facility_name = (
                 self.current.get("facility_name")
                 or self.current.get("facility", {}).get("name")
@@ -473,6 +487,7 @@ class AuctionBrowser(QMainWindow):
             self.vision_status.setStyleSheet("color:#9ca3af;")
             self.vision_status.setText("")
             self.render_vision_items(result.get("items", []))
+            self.using_manual = False
         else:
             note = (
                 "Analysis canceled; no results saved."
@@ -707,10 +722,13 @@ class AuctionBrowser(QMainWindow):
                 self.vision_resale[aid] = res
 
         if res:
-            lo = res.get("total_low", 0)
-            hi = res.get("total_high", 0)
-            self.render_vision_items(res.get("items", []))
+            items, totals, manual_active = self.resolve_display_items(res)
+            lo = totals["low"]
+            hi = totals["high"]
+            self.using_manual = manual_active
+            self.render_vision_items(items, manual_active=manual_active)
         else:
+            self.using_manual = False
             self.render_vision_items([])
 
         self.title.setText(a["facility_name"])
@@ -719,7 +737,7 @@ class AuctionBrowser(QMainWindow):
         self.lbl_score.setText(f"{score}/100")
         self.lbl_velocity.setText(f"{vel:.2f}/hr")
         if lo is not None and hi is not None:
-            self.lbl_resale.setText(f"${lo:,} – ${hi:,}")
+            self.update_totals_display({"low": lo, "high": hi})
         else:
             self.lbl_resale.setText("--")
 
@@ -792,10 +810,11 @@ class AuctionBrowser(QMainWindow):
 
         self.apply_image_summaries(aid)
 
-    def render_vision_items(self, items):
+    def render_vision_items(self, items, manual_active=False):
         clear_layout(self.vision_container)
         self.analysis_placeholder = None
         self.vision_items_displayed = []
+        self.btn_reset_ai.setVisible(manual_active)
 
         if not items:
             placeholder = QLabel("Analyze images to see itemized estimates.")
@@ -909,10 +928,140 @@ class AuctionBrowser(QMainWindow):
             return "Medium", "#eab308"
         return "Low", "#ef4444"
 
+    def resolve_display_items(self, res):
+        manual_items = res.get("manual_items") or []
+        if manual_items:
+            low = res.get("manual_total_low")
+            high = res.get("manual_total_high")
+            if low is None or high is None:
+                low, high = self.sum_estimates(manual_items)
+            return manual_items, {"low": float(low or 0), "high": float(high or 0)}, True
+
+        return (
+            res.get("items", []),
+            {
+                "low": float(res.get("total_low", 0)),
+                "high": float(res.get("total_high", 0)),
+            },
+            False,
+        )
+
+    def sum_estimates(self, items):
+        low = high = 0.0
+        for it in items:
+            if it.get("hidden"):
+                continue
+            low += float(it.get("low", 0) or 0)
+            high += float(it.get("high", 0) or 0)
+        return low, high
+
+    def update_totals_display(self, totals):
+        lo = float(totals.get("low", 0))
+        hi = float(totals.get("high", 0))
+        self.lbl_resale.setText(f"${lo:,.0f} – ${hi:,.0f}")
+
     def append_vision_items(self, items):
         for it in items:
             row = self.build_vision_row(it)
             self.vision_container.addWidget(row)
+
+    def collect_manual_items_from_ui(self):
+        manual_items = []
+        for i in range(self.vision_container.count()):
+            w = self.vision_container.itemAt(i).widget()
+            if not w or not hasattr(w, "name_input"):
+                continue
+
+            low_val = w.low_input.value()
+            high_val = w.high_input.value()
+            if high_val < low_val:
+                high_val = low_val
+                w.high_input.setValue(high_val)
+
+            manual_items.append(
+                {
+                    "name": w.name_input.text().strip() or "Unknown item",
+                    "brand": w.brand_input.text().strip() or "Unknown brand",
+                    "confidence": float(getattr(w, "confidence", 0)),
+                    "low": low_val,
+                    "high": high_val,
+                    "hidden": w.hide_btn.isChecked(),
+                }
+            )
+        return manual_items
+
+    def toggle_row_hidden(self, row, hidden):
+        for widget in (row.name_input, row.brand_input, row.low_input, row.high_input):
+            widget.setEnabled(not hidden)
+        row.hide_btn.setText("Show" if hidden else "Hide")
+        row.setStyleSheet("opacity:0.6;" if hidden else "")
+
+    def persist_manual_edits(self):
+        if not self.current:
+            return
+
+        aid = self.current.get("auction_id")
+        if not aid:
+            return
+
+        res = self.vision_resale.get(aid)
+        if not res:
+            self.vision_status.setStyleSheet("color:#ef4444;")
+            self.vision_status.setText("No AI output to edit. Run Analyze Images first.")
+            return
+
+        manual_items = self.collect_manual_items_from_ui()
+        low, high = self.sum_estimates(manual_items)
+        totals = {"low": low, "high": high}
+
+        res["manual_items"] = manual_items
+        res["manual_total_low"] = low
+        res["manual_total_high"] = high
+        self.vision_resale[aid] = res
+
+        facility_name = (
+            self.current.get("facility_name")
+            or self.current.get("facility", {}).get("name")
+            or ""
+        )
+
+        save_vision_result(
+            aid,
+            res,
+            facility_name=facility_name,
+            manual_items=manual_items,
+            manual_totals=totals,
+        )
+
+        self.using_manual = True
+        self.update_totals_display(totals)
+        self.render_vision_items(manual_items, manual_active=True)
+        self.vision_status.setStyleSheet("color:#22c55e;")
+        self.vision_status.setText("Manual edits saved. Totals updated.")
+
+    def reset_manual_overrides(self):
+        if not self.current:
+            return
+
+        aid = self.current.get("auction_id")
+        if not aid:
+            return
+
+        reset_manual_vision_result(aid)
+        res = self.vision_resale.get(aid)
+        if res:
+            res.pop("manual_items", None)
+            res.pop("manual_total_low", None)
+            res.pop("manual_total_high", None)
+            self.vision_resale[aid] = res
+            items, totals, manual_active = self.resolve_display_items(res)
+            self.using_manual = manual_active
+            self.render_vision_items(items, manual_active=manual_active)
+            self.update_totals_display(totals)
+
+        self.btn_reset_ai.setVisible(False)
+        self.vision_status.setStyleSheet("color:#9ca3af;")
+        self.vision_status.setText("Reverted to AI output.")
 
     def set_all_image_statuses(self, text, color):
         for url in self.image_tile_map.keys():
@@ -1000,6 +1149,7 @@ class AuctionBrowser(QMainWindow):
         conf = float(it.get("confidence", 0))
         low = float(it.get("low", 0))
         high = float(it.get("high", 0))
+        hidden = bool(it.get("hidden"))
 
         badge_label, badge_color = self.get_confidence_badge(conf)
 
@@ -1013,14 +1163,48 @@ class AuctionBrowser(QMainWindow):
             "color:white; padding:2px 8px; border-radius:8px; font-weight:600;"
             f"background:{badge_color};"
         )
-
-        info = QLabel(
-            f"<b>{name}</b> — {brand} • ${low:,.0f}–${high:,.0f}"
-        )
-        info.setWordWrap(True)
-
         row_layout.addWidget(badge)
-        row_layout.addWidget(info, 1)
+
+        name_input = QLineEdit(name)
+        name_input.setPlaceholderText("Item name")
+        brand_input = QLineEdit(brand)
+        brand_input.setPlaceholderText("Brand")
+
+        low_input = QDoubleSpinBox()
+        low_input.setRange(0, 1_000_000)
+        low_input.setDecimals(0)
+        low_input.setValue(low)
+        low_input.setPrefix("$")
+
+        high_input = QDoubleSpinBox()
+        high_input.setRange(0, 1_000_000)
+        high_input.setDecimals(0)
+        high_input.setValue(high)
+        high_input.setPrefix("$")
+
+        hide_btn = QPushButton("Hide")
+        hide_btn.setCheckable(True)
+        hide_btn.setChecked(hidden)
+        hide_btn.toggled.connect(lambda checked, r=row: self.toggle_row_hidden(r, checked))
+
+        save_btn = QPushButton("Save")
+        save_btn.clicked.connect(self.persist_manual_edits)
+
+        row.name_input = name_input
+        row.brand_input = brand_input
+        row.low_input = low_input
+        row.high_input = high_input
+        row.hide_btn = hide_btn
+        row.confidence = conf
+
+        row_layout.addWidget(name_input, 2)
+        row_layout.addWidget(brand_input, 2)
+        row_layout.addWidget(low_input)
+        row_layout.addWidget(high_input)
+        row_layout.addWidget(hide_btn)
+        row_layout.addWidget(save_btn)
+
+        self.toggle_row_hidden(row, hidden)
 
         return row
 
@@ -1106,8 +1290,12 @@ class AuctionBrowser(QMainWindow):
             )
             return None
 
+        items, totals, _ = self.resolve_display_items(res)
+
         badge_data = []
-        for it in res.get("items", []):
+        for it in items:
+            if it.get("hidden"):
+                continue
             conf = float(it.get("confidence", 0))
             badge_label, badge_color = self.get_confidence_badge(conf)
             badge_data.append(
@@ -1134,8 +1322,8 @@ class AuctionBrowser(QMainWindow):
         }
 
         totals = {
-            "low": float(res.get("total_low", 0)),
-            "high": float(res.get("total_high", 0)),
+            "low": float(totals.get("low", 0)),
+            "high": float(totals.get("high", 0)),
         }
 
         return {"metadata": meta, "totals": totals, "items": badge_data}
