@@ -12,7 +12,14 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QPixmap, QFont
 
 from config import API_BASE, HEADERS, SEARCH_PARAMS
-from db import init_db, save_bid, bid_velocity, get_recent_bids
+from db import (
+    init_db,
+    save_bid,
+    bid_velocity,
+    get_recent_bids,
+    save_vision_result,
+    load_vision_result,
+)
 from scoring import profit_score
 from alerts import SniperAlerts
 from charts import sparkline
@@ -324,6 +331,7 @@ class AuctionBrowser(QMainWindow):
         aid = self.current["auction_id"]
 
         self.vision_resale[aid] = result
+        save_vision_result(aid, result)
 
         lo = result.get("total_low", 0)
         hi = result.get("total_high", 0)
@@ -440,12 +448,17 @@ class AuctionBrowser(QMainWindow):
         score = profit_score(a, vel)
 
         tags = tag_from_text(a.get("unit_contents"))
-        
+
         aid = a["auction_id"]
         lo = hi = None
 
-        if aid in self.vision_resale:
-            res = self.vision_resale[aid]
+        res = self.vision_resale.get(aid)
+        if not res:
+            res = load_vision_result(aid)
+            if res:
+                self.vision_resale[aid] = res
+
+        if res:
             lo = res.get("total_low", 0)
             hi = res.get("total_high", 0)
             self.render_vision_items(res.get("items", []))

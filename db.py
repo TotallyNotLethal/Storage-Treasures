@@ -1,4 +1,5 @@
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 
@@ -12,6 +13,18 @@ def init_db():
             timestamp TEXT
         )
     """)
+
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS vision_results (
+            auction_id TEXT PRIMARY KEY,
+            items_json TEXT,
+            total_low REAL,
+            total_high REAL,
+            updated_at TEXT
+        )
+        """
+    )
     conn.commit()
     conn.close()
 
@@ -73,3 +86,63 @@ def get_recent_bids(auction_id, limit=20):
     conn.close()
 
     return [r[0] for r in rows]
+
+
+def save_vision_result(auction_id, result):
+    conn = sqlite3.connect("auctions.db")
+    c = conn.cursor()
+
+    c.execute(
+        """
+        INSERT INTO vision_results (auction_id, items_json, total_low, total_high, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(auction_id) DO UPDATE SET
+            items_json=excluded.items_json,
+            total_low=excluded.total_low,
+            total_high=excluded.total_high,
+            updated_at=excluded.updated_at
+        """,
+        (
+            auction_id,
+            json.dumps(result.get("items", [])),
+            float(result.get("total_low", 0)),
+            float(result.get("total_high", 0)),
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+
+    conn.commit()
+    conn.close()
+
+
+def load_vision_result(auction_id):
+    conn = sqlite3.connect("auctions.db")
+    c = conn.cursor()
+
+    c.execute(
+        """
+        SELECT items_json, total_low, total_high
+        FROM vision_results
+        WHERE auction_id = ?
+        """,
+        (auction_id,),
+    )
+
+    row = c.fetchone()
+    conn.close()
+
+    if not row:
+        return None
+
+    items_json, total_low, total_high = row
+
+    try:
+        items = json.loads(items_json)
+    except Exception:
+        items = []
+
+    return {
+        "items": items,
+        "total_low": float(total_low or 0),
+        "total_high": float(total_high or 0),
+    }
