@@ -5,13 +5,14 @@ from vision_gpt import analyze_image
 from vision_cache import image_hash, get_cached, set_cached
 
 class VisionWorker(QThread):
-    progress = Signal(int, int, list)
-    error = Signal(str)
-    finished = Signal(dict)
+    progress = Signal(str, int, int, list)
+    error = Signal(str, str)
+    finished = Signal(str, dict)
 
-    def __init__(self, image_urls):
+    def __init__(self, image_urls, auction_id):
         super().__init__()
         self.image_urls = image_urls
+        self.auction_id = auction_id
 
     def run(self):
         total_low = 0
@@ -30,7 +31,10 @@ class VisionWorker(QThread):
                 r.raise_for_status()
                 img_bytes = r.content
             except Exception as e:
-                self.error.emit(f"Failed to fetch image {idx}/{total}: {e}")
+                self.error.emit(
+                    self.auction_id,
+                    f"Failed to fetch image {idx}/{total}: {e}",
+                )
 
             if img_bytes:
                 result = analyze_image(img_bytes, seen_items=seen_names)
@@ -59,7 +63,7 @@ class VisionWorker(QThread):
 
                     all_items.append(it)
 
-            self.progress.emit(idx, total, list(all_items))
+            self.progress.emit(self.auction_id, idx, total, list(all_items))
 
         self.result = {
             "items": all_items,
@@ -67,5 +71,5 @@ class VisionWorker(QThread):
             "total_high": int(total_high)
         }
 
-        self.finished.emit(self.result)
+        self.finished.emit(self.auction_id, self.result)
 
