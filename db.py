@@ -22,7 +22,10 @@ def init_db():
             total_low REAL,
             total_high REAL,
             updated_at TEXT,
-            facility_name TEXT
+            facility_name TEXT,
+            manual_items_json TEXT,
+            manual_total_low REAL,
+            manual_total_high REAL
         )
         """
     )
@@ -32,6 +35,16 @@ def init_db():
     except sqlite3.OperationalError:
         # Column already exists
         pass
+    for col in (
+        "manual_items_json TEXT",
+        "manual_total_low REAL",
+        "manual_total_high REAL",
+    ):
+        try:
+            c.execute(f"ALTER TABLE vision_results ADD COLUMN {col}")
+        except sqlite3.OperationalError:
+            # Column already exists
+            pass
     conn.commit()
     conn.close()
 
@@ -95,20 +108,43 @@ def get_recent_bids(auction_id, limit=20):
     return [r[0] for r in rows]
 
 
-def save_vision_result(auction_id, result, facility_name=""):
+def save_vision_result(
+    auction_id,
+    result,
+    facility_name="",
+    manual_items=None,
+    manual_totals=None,
+):
     conn = sqlite3.connect("auctions.db")
     c = conn.cursor()
 
+    manual_json = None
+    manual_low = None
+    manual_high = None
+
+    if manual_items is not None:
+        try:
+            manual_json = json.dumps(manual_items)
+        except Exception:
+            manual_json = None
+
+    if manual_totals:
+        manual_low = float(manual_totals.get("low", 0))
+        manual_high = float(manual_totals.get("high", 0))
+
     c.execute(
         """
-        INSERT INTO vision_results (auction_id, items_json, total_low, total_high, updated_at, facility_name)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO vision_results (auction_id, items_json, total_low, total_high, updated_at, facility_name, manual_items_json, manual_total_low, manual_total_high)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(auction_id) DO UPDATE SET
             items_json=excluded.items_json,
             total_low=excluded.total_low,
             total_high=excluded.total_high,
             updated_at=excluded.updated_at,
-            facility_name=COALESCE(NULLIF(excluded.facility_name, ''), vision_results.facility_name)
+            facility_name=COALESCE(NULLIF(excluded.facility_name, ''), vision_results.facility_name),
+            manual_items_json=excluded.manual_items_json,
+            manual_total_low=excluded.manual_total_low,
+            manual_total_high=excluded.manual_total_high
         """,
         (
             auction_id,
@@ -117,6 +153,9 @@ def save_vision_result(auction_id, result, facility_name=""):
             float(result.get("total_high", 0)),
             datetime.now(timezone.utc).isoformat(),
             facility_name,
+            manual_json,
+            manual_low,
+            manual_high,
         ),
     )
 
@@ -130,7 +169,7 @@ def load_vision_result(auction_id):
 
     c.execute(
         """
-        SELECT items_json, total_low, total_high
+        SELECT items_json, total_low, total_high, manual_items_json, manual_total_low, manual_total_high
         FROM vision_results
         WHERE auction_id = ?
         """,
@@ -143,17 +182,25 @@ def load_vision_result(auction_id):
     if not row:
         return None
 
-    items_json, total_low, total_high = row
+    items_json, total_low, total_high, manual_json, manual_low, manual_high = row
 
     try:
         items = json.loads(items_json)
     except Exception:
         items = []
 
+    try:
+        manual_items = json.loads(manual_json) if manual_json is not None else []
+    except Exception:
+        manual_items = []
+
     return {
         "items": items,
         "total_low": float(total_low or 0),
         "total_high": float(total_high or 0),
+        "manual_items": manual_items,
+        "manual_total_low": float(manual_low) if manual_low is not None else None,
+        "manual_total_high": float(manual_high) if manual_high is not None else None,
     }
 
 
@@ -163,7 +210,7 @@ def get_recent_vision_results(limit=10):
 
     c.execute(
         """
-        SELECT auction_id, facility_name, updated_at, total_low, total_high
+        SELECT auction_id, facility_name, updated_at, total_low, total_high, manual_total_low, manual_total_high
         FROM vision_results
         ORDER BY datetime(updated_at) DESC
         LIMIT ?
@@ -176,14 +223,31 @@ def get_recent_vision_results(limit=10):
 
     results = []
     for row in rows:
-        aid, facility_name, updated_at, low, high = row
+        aid, facility_name, updated_at, low, high, manual_low, manual_high = row
+        low_val = float(manual_low) if manual_low is not None else float(low or 0)
+        high_val = float(manual_high) if manual_high is not None else float(high or 0)
         results.append(
             {
                 "auction_id": aid,
                 "facility_name": facility_name or "Unknown facility",
                 "updated_at": updated_at,
-                "total_low": float(low or 0),
-                "total_high": float(high or 0),
+                "total_low": low_val,
+                "total_high": high_val,
             }
         )
     return results
+
+
+def reset_manual_vision_result(auction_id):
+    conn = sqlite3.connect("auctions.db")
+    c = conn.cursor()
+    c.execute(
+        """
+        UPDATE vision_results
+        SET manual_items_json=NULL, manual_total_low=NULL, manual_total_high=NULL
+        WHERE auction_id=?
+        """,
+        (auction_id,),
+    )
+    conn.commit()
+    conn.close()
