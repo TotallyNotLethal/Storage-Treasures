@@ -7,9 +7,10 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QListWidget, QListWidgetItem,
     QLabel, QVBoxLayout, QHBoxLayout, QScrollArea, QPushButton,
     QFileDialog, QSplitter, QFrame, QGridLayout,
-    QLineEdit, QComboBox, QSlider, QMenu, QDialog, QDialogButtonBox
+    QLineEdit, QComboBox, QSlider, QMenu, QDialog, QDialogButtonBox,
+    QMessageBox,
 )
-from PySide6.QtGui import QPixmap, QFont
+from PySide6.QtGui import QPixmap, QFont, QPdfWriter, QPainter, QPageSize
 
 from config import API_BASE, HEADERS, SEARCH_PARAMS
 from db import (
@@ -285,10 +286,18 @@ class AuctionBrowser(QMainWindow):
         btn_map.clicked.connect(self.open_map)
         btn_export = QPushButton("Export CSV")
         btn_export.clicked.connect(self.export_csv)
+        btn_export_vision = QPushButton("Export Vision")
+        vision_menu = QMenu()
+        vision_csv = vision_menu.addAction("Vision CSV")
+        vision_pdf = vision_menu.addAction("Vision PDF")
+        vision_csv.triggered.connect(self.export_vision_csv)
+        vision_pdf.triggered.connect(self.export_vision_pdf)
+        btn_export_vision.setMenu(vision_menu)
 
         actions.addStretch()
         actions.addWidget(btn_map)
         actions.addWidget(btn_export)
+        actions.addWidget(btn_export_vision)
 
         # ---- TIMER ----
         self.timer = QTimer()
@@ -893,6 +902,13 @@ class AuctionBrowser(QMainWindow):
         self.btn_cancel_analyze.setEnabled(True)
         self.recent_list.setEnabled(True)
 
+    def get_confidence_badge(self, conf):
+        if conf >= 0.8:
+            return "High", "#22c55e"
+        if conf >= 0.5:
+            return "Medium", "#eab308"
+        return "Low", "#ef4444"
+
     def append_vision_items(self, items):
         for it in items:
             row = self.build_vision_row(it)
@@ -985,12 +1001,7 @@ class AuctionBrowser(QMainWindow):
         low = float(it.get("low", 0))
         high = float(it.get("high", 0))
 
-        if conf >= 0.8:
-            badge_label, badge_color = "High", "#22c55e"
-        elif conf >= 0.5:
-            badge_label, badge_color = "Medium", "#eab308"
-        else:
-            badge_label, badge_color = "Low", "#ef4444"
+        badge_label, badge_color = self.get_confidence_badge(conf)
 
         row = QWidget()
         row_layout = QHBoxLayout(row)
@@ -1053,6 +1064,194 @@ class AuctionBrowser(QMainWindow):
             return
         m = self.current["facility"]["marker"]
         webbrowser.open(f"https://www.google.com/maps?q={m['lat']},{m['lng']}")
+
+    def format_end_time(self):
+        exp = (
+            self.current
+            and self.current.get("expire_date", {})
+            .get("utc", {})
+            .get("datetime")
+        )
+        if not exp:
+            return "Unknown"
+        try:
+            dt = datetime.fromisoformat(exp)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone().strftime("%b %d, %Y %I:%M %p %Z")
+        except Exception:
+            return str(exp)
+
+    def get_vision_export_data(self):
+        if not self.current:
+            QMessageBox.information(
+                self,
+                "No auction selected",
+                "Select an auction to export its vision summary.",
+            )
+            return None
+
+        aid = self.current.get("auction_id")
+        res = self.vision_resale.get(aid)
+        if not res:
+            res = load_vision_result(aid)
+            if res:
+                self.vision_resale[aid] = res
+
+        if not res:
+            QMessageBox.information(
+                self,
+                "No analysis yet",
+                "Run Analyze Images to generate a vision summary before exporting.",
+            )
+            return None
+
+        badge_data = []
+        for it in res.get("items", []):
+            conf = float(it.get("confidence", 0))
+            badge_label, badge_color = self.get_confidence_badge(conf)
+            badge_data.append(
+                {
+                    "name": it.get("name") or "Unknown item",
+                    "brand": it.get("brand") or "Unknown brand",
+                    "confidence": conf,
+                    "badge": badge_label,
+                    "badge_color": badge_color,
+                    "low": float(it.get("low", 0)),
+                    "high": float(it.get("high", 0)),
+                }
+            )
+
+        meta = {
+            "facility": self.current.get("facility_name") or "Unknown facility",
+            "location": f"{self.current.get('address', '')}, {self.current.get('city', '')} {self.current.get('state', '')}",
+            "end_time": self.format_end_time(),
+            "current_bid": self.current.get("current_bid", {}).get("formatted")
+            or f"${self.current.get('current_bid', {}).get('amount', 0):,.0f}",
+            "total_bids": self.current.get("total_bids", "0"),
+            "bid_velocity": f"{bid_velocity(aid):.2f}/hr",
+            "unit_size": self.current.get("unit_size") or "",
+        }
+
+        totals = {
+            "low": float(res.get("total_low", 0)),
+            "high": float(res.get("total_high", 0)),
+        }
+
+        return {"metadata": meta, "totals": totals, "items": badge_data}
+
+    def export_vision_csv(self):
+        data = self.get_vision_export_data()
+        if not data:
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Vision CSV", "", "CSV Files (*.csv)"
+        )
+        if not path:
+            return
+
+        meta = data["metadata"]
+        totals = data["totals"]
+
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["Facility", meta["facility"]])
+            w.writerow(["Location", meta["location"]])
+            w.writerow(["Unit Size", meta["unit_size"]])
+            w.writerow(["Auction End", meta["end_time"]])
+            w.writerow(["Current Bid", meta["current_bid"]])
+            w.writerow(["Total Bids", meta["total_bids"]])
+            w.writerow(["Bid Velocity", meta["bid_velocity"]])
+            w.writerow([])
+            w.writerow(["Vision Totals", ""])
+            w.writerow(["Low", f"${totals['low']:,.0f}"])
+            w.writerow(["High", f"${totals['high']:,.0f}"])
+            w.writerow([])
+            w.writerow([
+                "Item",
+                "Brand",
+                "Confidence",
+                "Confidence Badge",
+                "Low Estimate",
+                "High Estimate",
+            ])
+            for it in data["items"]:
+                w.writerow(
+                    [
+                        it["name"],
+                        it["brand"],
+                        f"{it['confidence']*100:.0f}%",
+                        it["badge"],
+                        f"${it['low']:,.0f}",
+                        f"${it['high']:,.0f}",
+                    ]
+                )
+
+    def export_vision_pdf(self):
+        data = self.get_vision_export_data()
+        if not data:
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Vision PDF", "", "PDF Files (*.pdf)"
+        )
+        if not path:
+            return
+
+        meta = data["metadata"]
+        totals = data["totals"]
+
+        writer = QPdfWriter(path)
+        writer.setPageSize(QPageSize(QPageSize.Letter))
+        painter = QPainter(writer)
+
+        margin = 60
+        y = margin
+        width = writer.width() - margin * 2
+        line_height = 28
+
+        def ensure_space():
+            nonlocal y
+            if y > writer.height() - margin:
+                writer.newPage()
+                y = margin
+
+        def draw(text, size=12, bold=False):
+            nonlocal y
+            ensure_space()
+            font = painter.font()
+            font.setPointSize(size)
+            font.setBold(bold)
+            painter.setFont(font)
+            painter.drawText(margin, y, width, line_height, Qt.AlignLeft, text)
+            y += line_height
+
+        draw("Vision Summary Export", size=16, bold=True)
+        draw(meta["facility"], size=14, bold=True)
+        draw(meta["location"])
+        draw(f"Unit Size: {meta['unit_size']}")
+        draw(f"Auction Ends: {meta['end_time']}")
+        draw(f"Current Bid: {meta['current_bid']}  |  Total Bids: {meta['total_bids']}")
+        draw(f"Bid Velocity: {meta['bid_velocity']}")
+
+        y += 12
+        draw(
+            f"Vision Totals — Low: ${totals['low']:,.0f} | High: ${totals['high']:,.0f}",
+            bold=True,
+        )
+
+        y += 12
+        draw("Itemized Estimates", bold=True)
+        for it in data["items"]:
+            ensure_space()
+            line = (
+                f"• {it['name']} ({it['brand']}) — {it['badge']} "
+                f"{it['confidence']*100:.0f}% — ${it['low']:,.0f} to ${it['high']:,.0f}"
+            )
+            draw(line)
+
+        painter.end()
 
     def export_csv(self):
         if not self.current:
