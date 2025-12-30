@@ -2113,6 +2113,7 @@ class AuctionBrowser(QMainWindow):
 # ================= MAIN =================
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    app.setStyleSheet(STYLE)
     win = AuctionBrowser()
     win.show()
     sys.exit(app.exec())
