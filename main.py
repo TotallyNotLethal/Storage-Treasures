@@ -4,15 +4,16 @@ from vision_worker import VisionWorker
 
 import pgeocode
 
-from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSortFilterProxyModel, QRegularExpression
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSortFilterProxyModel, QRegularExpression, QUrl
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QListWidget, QListWidgetItem,
     QLabel, QVBoxLayout, QHBoxLayout, QScrollArea, QPushButton,
     QFileDialog, QSplitter, QFrame, QGridLayout, QSizePolicy,
     QLineEdit, QComboBox, QSlider, QMenu, QDialog, QDialogButtonBox,
     QMessageBox, QDoubleSpinBox, QTableView, QAbstractItemView, QToolButton,
-    QTabWidget, QSpinBox, QCheckBox, QFormLayout, QStyle,
+    QTabWidget, QSpinBox, QCheckBox, QFormLayout, QStyle, QStackedLayout,
 )
+from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtGui import (
     QPixmap,
     QFont,
@@ -83,6 +84,135 @@ class ClickableLabel(QLabel):
     def mousePressEvent(self, event):
         self.clicked.emit(self.payload)
         super().mousePressEvent(event)
+
+
+class MapPreview(QWidget):
+    def __init__(self, on_open_full_map, parent=None):
+        super().__init__(parent)
+        self.setMinimumSize(240, 170)
+        self.setMaximumHeight(240)
+
+        self.on_open_full_map = on_open_full_map
+        self.marker = None
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        toolbar = QHBoxLayout()
+        toolbar.setContentsMargins(0, 0, 0, 0)
+
+        self.btn_recenter = QToolButton()
+        self.btn_recenter.setText("Recenter")
+        self.btn_recenter.setIcon(self.style().standardIcon(QStyle.SP_BrowserReload))
+        self.btn_recenter.clicked.connect(self.recenter)
+        self.btn_recenter.setEnabled(False)
+
+        self.btn_open_full = QToolButton()
+        self.btn_open_full.setText("Open Full Map")
+        self.btn_open_full.setIcon(self.style().standardIcon(QStyle.SP_DriveNetIcon))
+        self.btn_open_full.clicked.connect(self.open_full_map)
+        self.btn_open_full.setEnabled(False)
+
+        toolbar.addWidget(self.btn_recenter)
+        toolbar.addWidget(self.btn_open_full)
+        toolbar.addStretch()
+        layout.addLayout(toolbar)
+
+        self.web_view = QWebEngineView()
+        self.web_view.setContextMenuPolicy(Qt.NoContextMenu)
+        self.web_view.setStyleSheet("border:1px solid #1f2937; border-radius:12px;")
+
+        self.fallback_label = QLabel("Add a facility location to preview the map.")
+        self.fallback_label.setAlignment(Qt.AlignCenter)
+        self.fallback_label.setWordWrap(True)
+        self.fallback_label.setStyleSheet(
+            "border:1px dashed #1f2937; border-radius:12px; padding:12px; color:#9ca3af;"
+        )
+
+        self.stack = QStackedLayout()
+        self.stack.setContentsMargins(0, 0, 0, 0)
+        self.stack.setStackingMode(QStackedLayout.StackAll)
+        self.stack.addWidget(self.fallback_label)
+        self.stack.addWidget(self.web_view)
+
+        container = QWidget()
+        container.setLayout(self.stack)
+        layout.addWidget(container)
+
+        self.show_fallback()
+
+    def show_fallback(self, message="Add a facility location to preview the map."):
+        self.fallback_label.setText(message)
+        self.stack.setCurrentWidget(self.fallback_label)
+        self.btn_recenter.setEnabled(False)
+        self.btn_open_full.setEnabled(False)
+
+    def show_map(self):
+        self.stack.setCurrentWidget(self.web_view)
+        self.btn_recenter.setEnabled(True)
+        self.btn_open_full.setEnabled(True)
+
+    def load_marker(self, marker):
+        self.marker = marker if marker else None
+        if not marker:
+            self.show_fallback("Map preview unavailable without coordinates.")
+            return
+
+        lat, lng = marker.get("lat"), marker.get("lng")
+        try:
+            lat, lng = float(lat), float(lng)
+        except (TypeError, ValueError):
+            self.show_fallback("Map preview unavailable without valid coordinates.")
+            return
+
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <meta charset='utf-8' />
+            <meta name='viewport' content='initial-scale=1.0'>
+            <link
+              rel='stylesheet'
+              href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'
+              integrity='sha256-sA+e2H1Lg0JEZ5dj62nCayG4h3GcGZTcECI1qek4z+M='
+              crossorigin=''
+            />
+            <style>
+              html, body, #map {{ height: 100%; margin: 0; }}
+              #map {{ border-radius: 12px; }}
+            </style>
+          </head>
+          <body>
+            <div id='map'></div>
+            <script
+              src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
+              integrity='sha256-o9N1j7kQdwy3vWx3XvGkkgZ+3Jj8GkMq1kE1A6Bv700='
+              crossorigin=''
+            ></script>
+            <script>
+              const center = [{lat}, {lng}];
+              const map = L.map('map', {{ zoomControl: true }}).setView(center, 13);
+              L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+                maxZoom: 19,
+                attribution: '© OpenStreetMap'
+              }}).addTo(map);
+              L.marker(center).addTo(map);
+            </script>
+          </body>
+        </html>
+        """
+
+        self.web_view.setHtml(html, QUrl("https://local.map"))
+        self.show_map()
+
+    def recenter(self):
+        if self.marker:
+            self.load_marker(self.marker)
+
+    def open_full_map(self):
+        if self.marker and self.on_open_full_map:
+            self.on_open_full_map()
 
 # ================= MAIN =================
 class AuctionBrowser(QMainWindow):
@@ -437,13 +567,7 @@ class AuctionBrowser(QMainWindow):
         self.card_details.layout.addWidget(self.details_scroll)
 
         self.map_card = Card("Map Preview")
-        self.map_preview = QLabel("Map preview unavailable")
-        self.map_preview.setAlignment(Qt.AlignCenter)
-        self.map_preview.setFixedSize(240, 170)
-        self.map_preview.setStyleSheet(
-            "border:1px solid #1f2937; border-radius:12px;"
-            "background:#0b1222; color:#9ca3af;",
-        )
+        self.map_preview = MapPreview(self.open_map)
         self.map_card.layout.addWidget(self.map_preview)
         overview_content.addWidget(self.map_card, 1)
 
@@ -1683,10 +1807,19 @@ class AuctionBrowser(QMainWindow):
 
     # ================= ACTIONS =================
     def open_map(self):
-        if not self.current:
+        marker = None
+        if self.current:
+            marker = (self.current.get("facility") or {}).get("marker")
+        if not marker:
+            QMessageBox.information(self, "Map", "Location not available for this facility.")
             return
-        m = self.current["facility"]["marker"]
-        webbrowser.open(f"https://www.google.com/maps?q={m['lat']},{m['lng']}")
+
+        lat, lng = marker.get("lat"), marker.get("lng")
+        if lat is None or lng is None:
+            QMessageBox.information(self, "Map", "Location not available for this facility.")
+            return
+
+        webbrowser.open(f"https://www.google.com/maps?q={lat},{lng}")
 
     def get_search_coordinates(self):
         zip_code = str(SEARCH_PARAMS.get("search_term", "")).strip()
@@ -1761,53 +1894,9 @@ class AuctionBrowser(QMainWindow):
             "border-radius:10px; font-weight:600;"
         )
 
-    def fetch_map_tile(self, url):
-        try:
-            r = requests.get(url, timeout=10)
-            if r.status_code == 200:
-                return r.content
-        except Exception:
-            return None
-        return None
-
     def update_map_preview(self, facility):
         marker = facility.get("marker") if facility else None
-        if not marker:
-            self.map_preview.setText("Location not available")
-            self.map_preview.setPixmap(QPixmap())
-            return
-
-        lat, lng = marker.get("lat"), marker.get("lng")
-        if lat is None or lng is None:
-            self.map_preview.setText("Location not available")
-            self.map_preview.setPixmap(QPixmap())
-            return
-
-        self.map_preview.setText("Loading map…")
-        self.map_preview.setPixmap(QPixmap())
-
-        url = (
-            "https://staticmap.openstreetmap.de/staticmap.php?"
-            f"center={lat},{lng}&zoom=13&size=300x200&markers={lat},{lng},lightblue-pushpin"
-        )
-
-        def handle(data):
-            if not data:
-                self.map_preview.setText("Map preview unavailable")
-                return
-            pix = QPixmap()
-            pix.loadFromData(data)
-            self.map_preview.setPixmap(
-                pix.scaled(
-                    self.map_preview.width(),
-                    self.map_preview.height(),
-                    Qt.KeepAspectRatio,
-                    Qt.SmoothTransformation,
-                )
-            )
-            self.map_preview.setText("")
-
-        self.run_worker(lambda: self.fetch_map_tile(url), handle)
+        self.map_preview.load_marker(marker)
 
     def format_end_time(self):
         exp = (
