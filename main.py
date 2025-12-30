@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QSplitter, QFrame, QGridLayout, QSizePolicy,
     QLineEdit, QComboBox, QSlider, QMenu, QDialog, QDialogButtonBox,
     QMessageBox, QDoubleSpinBox, QTableView, QAbstractItemView, QToolButton,
-    QTabWidget, QSpinBox, QCheckBox, QFormLayout,
+    QTabWidget, QSpinBox, QCheckBox, QFormLayout, QStyle,
 )
 from PySide6.QtGui import (
     QPixmap,
@@ -318,6 +318,55 @@ class AuctionBrowser(QMainWindow):
         self.header.layout.addLayout(header_row)
         self.header.layout.addWidget(self.subtitle)
 
+        toolbar = QFrame()
+        toolbar.setObjectName("ActionToolbar")
+        toolbar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        toolbar.setStyleSheet(
+            "#ActionToolbar {"
+            "background: #0b1222; border: 1px solid #1f2937; border-radius: 12px;"
+            "padding: 10px 12px;"
+            "}"
+            "#ActionToolbar QToolButton {"
+            "background: #111827; color: #e5e7eb; border: 1px solid #1f2937;"
+            "border-radius: 10px; padding: 8px 12px;"
+            "}"
+            "#ActionToolbar QToolButton:hover { background: #0f172a; border-color: #374151; }"
+            "#ActionToolbar QToolButton:pressed { background: #0b1222; }"
+        )
+        toolbar_layout = QHBoxLayout(toolbar)
+        toolbar_layout.setContentsMargins(4, 0, 4, 0)
+        toolbar_layout.setSpacing(10)
+
+        btn_map = QToolButton()
+        btn_map.setText("Open Map")
+        btn_map.setIcon(self.style().standardIcon(QStyle.SP_DriveNetIcon))
+        btn_map.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        btn_map.clicked.connect(self.open_map)
+        toolbar_layout.addWidget(btn_map)
+
+        btn_export = QToolButton()
+        btn_export.setText("Export CSV")
+        btn_export.setIcon(self.style().standardIcon(QStyle.SP_DialogSaveButton))
+        btn_export.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        btn_export.clicked.connect(self.export_csv)
+        toolbar_layout.addWidget(btn_export)
+
+        btn_export_vision = QToolButton()
+        btn_export_vision.setText("Export Vision")
+        btn_export_vision.setIcon(self.style().standardIcon(QStyle.SP_FileDialogDetailedView))
+        btn_export_vision.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        btn_export_vision.setPopupMode(QToolButton.InstantPopup)
+        vision_menu = QMenu()
+        vision_csv = vision_menu.addAction("Vision CSV")
+        vision_pdf = vision_menu.addAction("Vision PDF")
+        vision_csv.triggered.connect(self.export_vision_csv)
+        vision_pdf.triggered.connect(self.export_vision_pdf)
+        btn_export_vision.setMenu(vision_menu)
+        toolbar_layout.addWidget(btn_export_vision)
+
+        toolbar_layout.addStretch()
+        overview_layout.addWidget(toolbar)
+
         # Inline banner for analysis lock state (hidden by default)
         self.analysis_banner = QFrame()
         self.analysis_banner.setStyleSheet(
@@ -397,13 +446,6 @@ class AuctionBrowser(QMainWindow):
         )
         self.map_card.layout.addWidget(self.map_preview)
         overview_content.addWidget(self.map_card, 1)
-
-        overview_actions = QHBoxLayout()
-        overview_actions.addStretch()
-        btn_map = QPushButton("Open in Google Maps")
-        btn_map.clicked.connect(self.open_map)
-        overview_actions.addWidget(btn_map)
-        overview_layout.addLayout(overview_actions)
 
         gallery = QWidget()
         gallery_layout = QVBoxLayout(gallery)
@@ -486,24 +528,6 @@ class AuctionBrowser(QMainWindow):
         recent_layout.addWidget(self.recent_list)
         self.recent_card.layout.addLayout(recent_layout)
         activity_layout.addWidget(self.recent_card)
-
-        actions = QHBoxLayout()
-        actions.setSpacing(12)
-        activity_layout.addLayout(actions)
-
-        btn_export = QPushButton("Export CSV")
-        btn_export.clicked.connect(self.export_csv)
-        btn_export_vision = QPushButton("Export Vision")
-        vision_menu = QMenu()
-        vision_csv = vision_menu.addAction("Vision CSV")
-        vision_pdf = vision_menu.addAction("Vision PDF")
-        vision_csv.triggered.connect(self.export_vision_csv)
-        vision_pdf.triggered.connect(self.export_vision_pdf)
-        btn_export_vision.setMenu(vision_menu)
-
-        actions.addStretch()
-        actions.addWidget(btn_export)
-        actions.addWidget(btn_export_vision)
 
         self.apply_preferences(refresh=False)
 
