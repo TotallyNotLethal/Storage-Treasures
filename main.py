@@ -175,8 +175,6 @@ class MapPreview(QWidget):
             <link
               rel='stylesheet'
               href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'
-              integrity='sha256-o9N1j7kCQ7kHuo0d9kT8sFPx3SO9T9edkKyfmw4v7k0='
-              crossorigin=''
             />
             <style>
               html, body, #map {{ height: 100%; margin: 0; }}
@@ -187,8 +185,6 @@ class MapPreview(QWidget):
             <div id='map'></div>
             <script
               src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
-              integrity='sha256-o8EeYV3pHnXkG1fTG7J0i0rD5Q0FyYyqS/fMJkxT7kM='
-              crossorigin=''
             ></script>
             <script>
               const center = [{lat}, {lng}];
