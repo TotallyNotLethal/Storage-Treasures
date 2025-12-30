@@ -1717,9 +1717,14 @@ class AuctionBrowser(QMainWindow):
             return None
 
         lat1, lng1 = search_coords
-        lat2, lng2 = facility_marker.get("lat"), facility_marker.get("lng")
+        lat2_raw, lng2_raw = facility_marker.get("lat"), facility_marker.get("lng")
 
-        if None in (lat2, lng2):
+        try:
+            lat2, lng2 = float(lat2_raw), float(lng2_raw)
+        except (TypeError, ValueError):
+            return None
+
+        if None in (lat2, lng2) or math.isnan(lat2) or math.isnan(lng2):
             return None
 
         def to_radians(deg):
