@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QSplitter, QFrame, QGridLayout, QSizePolicy,
     QLineEdit, QComboBox, QSlider, QMenu, QDialog, QDialogButtonBox,
     QMessageBox, QDoubleSpinBox, QTableView, QAbstractItemView, QToolButton,
-    QTabWidget,
+    QTabWidget, QSpinBox, QCheckBox, QFormLayout,
 )
 from PySide6.QtGui import (
     QPixmap,
@@ -42,7 +42,7 @@ from resale import estimate
 from state import AppState
 from ui_helpers import Card, clear_layout
 from image_viewer import ImageViewer
-from styles import STYLE
+from styles import STYLE, THEMES
 
 
 # ================= THREAD =================
@@ -95,6 +95,8 @@ class AuctionBrowser(QMainWindow):
         self.state = AppState()
         self.sniper = SniperAlerts()
 
+        self.apply_theme(self.state.preferences.get("theme"))
+
         self.user_ip = None
         self.vision_resale = {}
         self.auctions = []
@@ -134,10 +136,15 @@ class AuctionBrowser(QMainWindow):
         btn_refresh = QPushButton("Refresh")
         btn_refresh.clicked.connect(self.refresh_search)
 
+        btn_settings = QToolButton()
+        btn_settings.setText("Settings")
+        btn_settings.clicked.connect(self.open_settings_dialog)
+
         search_bar.addWidget(QLabel("ZIP"))
         search_bar.addWidget(self.zip_input)
         search_bar.addWidget(QLabel("Miles"))
         search_bar.addWidget(self.radius_input)
+        search_bar.addWidget(btn_settings)
         search_bar.addWidget(btn_refresh)
 
         left_layout.addLayout(search_bar)
@@ -498,6 +505,8 @@ class AuctionBrowser(QMainWindow):
         actions.addWidget(btn_export)
         actions.addWidget(btn_export_vision)
 
+        self.apply_preferences(refresh=False)
+
         # ---- TIMER ----
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_countdown)
@@ -584,6 +593,100 @@ class AuctionBrowser(QMainWindow):
         self.lbl_time_val.setText(f"Max Hours: {value}")
         self.apply_filters()
 
+    def apply_theme(self, theme_name):
+        app = QApplication.instance()
+        if not app:
+            return
+        theme = THEMES.get(theme_name) or STYLE
+        app.setStyleSheet(theme)
+
+    def apply_preferences(self, refresh=True):
+        prefs = self.state.preferences
+
+        zip_code = prefs.get("default_zip", "44647")
+        if zip_code:
+            self.zip_input.setText(zip_code)
+
+        radius = str(prefs.get("default_radius", 25))
+        idx = self.radius_input.findText(radius)
+        if idx != -1:
+            self.radius_input.setCurrentIndex(idx)
+
+        min_score = max(0, min(100, int(prefs.get("min_score_default", 0) or 0)))
+        max_hours = max(0, min(72, int(prefs.get("max_hours_default", 72) or 0)))
+        self.score_slider.setValue(min_score)
+        self.time_slider.setValue(max_hours)
+
+        self.apply_theme(prefs.get("theme"))
+
+        SEARCH_PARAMS["search_term"] = zip_code
+        SEARCH_PARAMS["search_radius"] = radius
+
+        if refresh:
+            self.refresh_search()
+
+    def open_settings_dialog(self):
+        prefs = self.state.preferences.copy()
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Preferences")
+        layout = QVBoxLayout(dlg)
+        form = QFormLayout()
+
+        zip_input = QLineEdit(prefs.get("default_zip", ""))
+
+        radius_combo = QComboBox()
+        radius_options = [self.radius_input.itemText(i) for i in range(self.radius_input.count())]
+        radius_combo.addItems(radius_options)
+        radius_combo.setCurrentText(str(prefs.get("default_radius", 25)))
+
+        min_score_spin = QSpinBox()
+        min_score_spin.setRange(0, 100)
+        min_score_spin.setValue(int(prefs.get("min_score_default", 0) or 0))
+
+        max_hours_spin = QSpinBox()
+        max_hours_spin.setRange(0, 72)
+        max_hours_spin.setValue(int(prefs.get("max_hours_default", 72) or 72))
+
+        theme_combo = QComboBox()
+        theme_combo.addItems(THEMES.keys())
+        theme_combo.setCurrentText(prefs.get("theme", "Dark"))
+
+        lock_checkbox = QCheckBox("Lock auction list during analysis")
+        lock_checkbox.setChecked(prefs.get("lock_during_analysis", True))
+
+        banner_checkbox = QCheckBox("Show analysis banner")
+        banner_checkbox.setChecked(prefs.get("show_analysis_banner", True))
+
+        form.addRow("Default ZIP", zip_input)
+        form.addRow("Default Radius (miles)", radius_combo)
+        form.addRow("Min Score slider default", min_score_spin)
+        form.addRow("Max Hours slider default", max_hours_spin)
+        form.addRow("Theme", theme_combo)
+
+        layout.addLayout(form)
+        layout.addWidget(QLabel("Analysis behaviors"))
+        layout.addWidget(lock_checkbox)
+        layout.addWidget(banner_checkbox)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+
+        if dlg.exec() == QDialog.Accepted:
+            prefs.update({
+                "default_zip": zip_input.text().strip() or prefs.get("default_zip", "44647"),
+                "default_radius": int(radius_combo.currentText()),
+                "min_score_default": min_score_spin.value(),
+                "max_hours_default": max_hours_spin.value(),
+                "theme": theme_combo.currentText(),
+                "lock_during_analysis": lock_checkbox.isChecked(),
+                "show_analysis_banner": banner_checkbox.isChecked(),
+            })
+            self.state.preferences = prefs
+            self.state.save()
+            self.apply_preferences()
+
     def refresh_search(self):
         zip_code = self.zip_input.text().strip()
         radius = self.radius_input.currentText()
@@ -629,11 +732,15 @@ class AuctionBrowser(QMainWindow):
         self.state.vision_image_summaries[aid] = {}
         self.set_all_image_statuses("Analyzing…", "#0ea5e9")
 
-        self.lock_auction_list()
+        lock_enabled = self.state.preferences.get("lock_during_analysis", True)
+        if lock_enabled:
+            self.lock_auction_list()
         self.btn_analyze.setEnabled(False)
-        self.btn_analyze.setText("Analyzing images… (list locked)")
+        self.btn_analyze.setText(
+            "Analyzing images… (list locked)" if lock_enabled else "Analyzing images…"
+        )
         self.btn_analyze.setToolTip(
-            "Selection is locked during analysis to avoid mixing auctions."
+            "Selection is locked during analysis to avoid mixing auctions." if lock_enabled else "Analysis is running in the background."
         )
         self.btn_cancel_analyze.setVisible(True)
         self.btn_cancel_analyze.setEnabled(True)
@@ -642,9 +749,13 @@ class AuctionBrowser(QMainWindow):
         self.vision_status.setText("Downloading and analyzing images…")
 
         clear_layout(self.vision_container)
+        lock_note = (
+            "selection locked to prevent cross-auction updates."
+            if lock_enabled
+            else "analysis running in the background."
+        )
         placeholder = QLabel(
-            "Analyzing images… (0/%d) — selection locked to prevent cross-auction updates."
-            % len(image_urls)
+            f"Analyzing images… (0/{len(image_urls)}) — {lock_note}"
         )
         placeholder.setStyleSheet("color:#9ca3af;")
         self.analysis_placeholder = placeholder
@@ -1175,7 +1286,8 @@ class AuctionBrowser(QMainWindow):
 
     def set_analysis_active(self, active, auction_name=""):
         self.card_details.setEnabled(not active)
-        if active:
+        show_banner = self.state.preferences.get("show_analysis_banner", True)
+        if active and show_banner:
             name = auction_name or self.title.text() or "this auction"
             self.analysis_label.setText(
                 f"Analyzing {name} — switching is disabled until completion."
@@ -1875,7 +1987,6 @@ class AuctionBrowser(QMainWindow):
 # ================= MAIN =================
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    app.setStyleSheet(STYLE)
     win = AuctionBrowser()
     win.show()
     sys.exit(app.exec())
