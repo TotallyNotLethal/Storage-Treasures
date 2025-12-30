@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSortFilterProxyModel, Q
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QListWidget, QListWidgetItem,
     QLabel, QVBoxLayout, QHBoxLayout, QScrollArea, QPushButton,
-    QFileDialog, QSplitter, QFrame, QGridLayout,
+    QFileDialog, QSplitter, QFrame, QGridLayout, QSizePolicy,
     QLineEdit, QComboBox, QSlider, QMenu, QDialog, QDialogButtonBox,
     QMessageBox, QDoubleSpinBox, QTableView, QAbstractItemView, QToolButton,
 )
@@ -364,6 +364,30 @@ class AuctionBrowser(QMainWindow):
         self.card_details = Card("Auction Details")
         content.addWidget(self.card_details, 2)
 
+        scroll_style = (
+            "QScrollArea { border: none; }"
+            "QScrollBar:vertical { width: 8px; background: transparent; margin: 0px; }"
+            "QScrollBar::handle:vertical { background: #1f2937; border-radius: 4px; }"
+            "QScrollBar::handle:vertical:hover { background: #334155; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+            "QScrollBar:horizontal { height: 0px; }"
+        )
+
+        self.details_scroll = QScrollArea()
+        self.details_scroll.setWidgetResizable(True)
+        self.details_scroll.setFrameShape(QFrame.NoFrame)
+        self.details_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.details_scroll.setStyleSheet(scroll_style)
+        self.details_scroll.setMinimumHeight(260)
+        self.details_scroll.setMaximumHeight(520)
+
+        details_container = QWidget()
+        self.details_layout = QVBoxLayout(details_container)
+        self.details_layout.setContentsMargins(0, 0, 0, 0)
+        self.details_layout.setSpacing(8)
+        self.details_scroll.setWidget(details_container)
+        self.card_details.layout.addWidget(self.details_scroll)
+
         self.card_images = Card("Images")
         content.addWidget(self.card_images, 3)
         self.image_grid = QGridLayout()
@@ -379,7 +403,20 @@ class AuctionBrowser(QMainWindow):
         controls.addWidget(self.btn_analyze)
         controls.addWidget(self.btn_cancel_analyze)
         controls.addStretch()
-        self.card_images.layout.insertLayout(0, controls)
+        self.card_images.layout.insertLayout(1, controls)
+
+        self.images_scroll = QScrollArea()
+        self.images_scroll.setWidgetResizable(True)
+        self.images_scroll.setFrameShape(QFrame.NoFrame)
+        self.images_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.images_scroll.setStyleSheet(scroll_style)
+        self.images_scroll.setMinimumHeight(340)
+        self.images_scroll.setMaximumHeight(720)
+
+        images_container = QWidget()
+        images_layout = QVBoxLayout(images_container)
+        images_layout.setContentsMargins(0, 0, 0, 0)
+        images_layout.setSpacing(8)
 
         vision_header = QHBoxLayout()
         vision_header.setContentsMargins(0, 0, 0, 0)
@@ -392,18 +429,21 @@ class AuctionBrowser(QMainWindow):
         self.btn_reset_ai.clicked.connect(self.reset_manual_overrides)
         vision_header.addStretch()
         vision_header.addWidget(self.btn_reset_ai)
-        self.card_images.layout.addLayout(vision_header)
+        images_layout.addLayout(vision_header)
 
         self.vision_status = QLabel()
         self.vision_status.setStyleSheet("color:#9ca3af;")
-        self.card_images.layout.addWidget(self.vision_status)
+        images_layout.addWidget(self.vision_status)
 
         self.vision_container = QVBoxLayout()
         self.vision_container.setSpacing(4)
         self.vision_items_displayed = []
-        self.card_images.layout.addLayout(self.vision_container)
+        images_layout.addLayout(self.vision_container)
 
-        self.card_images.layout.addLayout(self.image_grid)
+        images_layout.addLayout(self.image_grid)
+
+        self.images_scroll.setWidget(images_container)
+        self.card_images.layout.addWidget(self.images_scroll)
 
         self.render_vision_items([])
 
@@ -939,12 +979,29 @@ class AuctionBrowser(QMainWindow):
         else:
             self.lbl_resale.setText("--")
 
-        clear_layout(self.card_details.layout)
+        clear_layout(self.details_layout)
         clear_layout(self.image_grid)
         self.image_tile_map = {}
 
         def row(k, v):
-            self.card_details.layout.addWidget(QLabel(f"<b>{k}</b>: {v}"))
+            row_frame = QFrame()
+            row_layout = QHBoxLayout(row_frame)
+            row_layout.setContentsMargins(6, 4, 6, 4)
+            row_layout.setSpacing(12)
+
+            title_lbl = QLabel(k)
+            title_lbl.setStyleSheet("font-weight:600;")
+            title_lbl.setMinimumWidth(120)
+
+            value_lbl = QLabel(str(v))
+            value_lbl.setWordWrap(True)
+            value_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            max_width = max(self.card_details.width(), self.details_scroll.viewport().width())
+            value_lbl.setMaximumWidth(max(max_width - 40, 320))
+
+            row_layout.addWidget(title_lbl)
+            row_layout.addWidget(value_lbl, 1)
+            self.details_layout.addWidget(row_frame)
 
         row("Unit Size", a["unit_size"])
         row("Current Bid", a["current_bid"]["formatted"])
@@ -957,8 +1014,8 @@ class AuctionBrowser(QMainWindow):
         sp = sparkline(bids, velocity=vel)
         lbl = QLabel()
         lbl.setPixmap(sp)
-        self.card_details.layout.addWidget(QLabel("Bid Trend"))
-        self.card_details.layout.addWidget(lbl)
+        self.details_layout.addWidget(QLabel("Bid Trend"))
+        self.details_layout.addWidget(lbl)
 
         r = c = 0
         for idx, img in enumerate(a.get("images", []), start=1):
