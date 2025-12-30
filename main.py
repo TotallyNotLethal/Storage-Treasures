@@ -578,7 +578,6 @@ class AuctionBrowser(QMainWindow):
 
         self.card_images = Card("Images")
         gallery_layout.addWidget(self.card_images)
-        self.image_grid = QGridLayout()
         controls = QHBoxLayout()
         controls.setSpacing(8)
         self.btn_analyze = QPushButton("Analyze Images")
@@ -603,32 +602,41 @@ class AuctionBrowser(QMainWindow):
 
         images_container = QWidget()
         images_layout = QVBoxLayout(images_container)
-        images_layout.setContentsMargins(0, 0, 0, 0)
-        images_layout.setSpacing(8)
+        images_layout.setContentsMargins(6, 6, 6, 6)
+        images_layout.setSpacing(12)
 
+        self.vision_card = Card("Vision Breakdown")
         vision_header = QHBoxLayout()
         vision_header.setContentsMargins(0, 0, 0, 0)
-        self.vision_title = QLabel("Vision Breakdown")
-        self.vision_title.setStyleSheet("font-weight:600;")
-        vision_header.addWidget(self.vision_title)
 
         self.btn_reset_ai = QPushButton("Reset to AI output")
         self.btn_reset_ai.setVisible(False)
         self.btn_reset_ai.clicked.connect(self.reset_manual_overrides)
         vision_header.addStretch()
         vision_header.addWidget(self.btn_reset_ai)
-        images_layout.addLayout(vision_header)
+        self.vision_card.layout.addLayout(vision_header)
 
         self.vision_status = QLabel()
         self.vision_status.setStyleSheet("color:#9ca3af;")
-        images_layout.addWidget(self.vision_status)
+        self.vision_card.layout.addWidget(self.vision_status)
 
         self.vision_container = QVBoxLayout()
-        self.vision_container.setSpacing(4)
+        self.vision_container.setSpacing(6)
         self.vision_items_displayed = []
-        images_layout.addLayout(self.vision_container)
+        self.vision_card.layout.addLayout(self.vision_container)
+        images_layout.addWidget(self.vision_card)
 
-        images_layout.addLayout(self.image_grid)
+        self.image_grid = QGridLayout()
+        self.image_grid.setSpacing(12)
+        grid_container = QWidget()
+        grid_layout = QVBoxLayout(grid_container)
+        grid_layout.setContentsMargins(0, 0, 0, 0)
+        grid_layout.setSpacing(6)
+        grid_layout.addLayout(self.image_grid)
+
+        self.grid_card = Card("Auction Images")
+        self.grid_card.layout.addWidget(grid_container)
+        images_layout.addWidget(self.grid_card)
 
         self.images_scroll.setWidget(images_container)
         self.card_images.layout.addWidget(self.images_scroll)
