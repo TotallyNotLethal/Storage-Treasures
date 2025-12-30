@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QSplitter, QFrame, QGridLayout, QSizePolicy,
     QLineEdit, QComboBox, QSlider, QMenu, QDialog, QDialogButtonBox,
     QMessageBox, QDoubleSpinBox, QTableView, QAbstractItemView, QToolButton,
+    QTabWidget,
 )
 from PySide6.QtGui import (
     QPixmap,
@@ -181,19 +182,6 @@ class AuctionBrowser(QMainWindow):
 
         left_layout.addWidget(filters)
 
-        self.recent_card = Card("Recent Vision Results", fixed_height=180)
-        recent_layout = QVBoxLayout()
-        recent_layout.setContentsMargins(0, 0, 0, 0)
-        self.recent_list = QListWidget()
-        self.recent_list.setFixedHeight(140)
-        self.recent_list.setToolTip(
-            "Cached analyses open immediately without reprocessing images."
-        )
-        self.recent_list.itemClicked.connect(self.load_cached_analysis)
-        recent_layout.addWidget(self.recent_list)
-        self.recent_card.layout.addLayout(recent_layout)
-        left_layout.addWidget(self.recent_card)
-
         # ---- AUCTION LIST CONTROLS ----
         list_toolbar = QHBoxLayout()
         list_toolbar.setSpacing(6)
@@ -289,14 +277,18 @@ class AuctionBrowser(QMainWindow):
         scroll.setWidgetResizable(True)
         splitter.addWidget(scroll)
 
-        root = QWidget()
-        scroll.setWidget(root)
-        self.main = QVBoxLayout(root)
-        self.main.setSpacing(14)
+        self.tabs = QTabWidget()
+        scroll.setWidget(self.tabs)
+        self.tabs.currentChanged.connect(self.on_tab_changed)
+
+        overview = QWidget()
+        overview_layout = QVBoxLayout(overview)
+        overview_layout.setSpacing(14)
+        self.tabs.addTab(overview, "Overview")
 
         # ---- HEADER ----
         self.header = Card(fixed_height=90)
-        self.main.addWidget(self.header)
+        overview_layout.addWidget(self.header)
 
         self.title = QLabel()
         self.title.setFont(QFont("Segoe UI", 18, QFont.Bold))
@@ -332,11 +324,11 @@ class AuctionBrowser(QMainWindow):
         self.analysis_label.setWordWrap(True)
         banner_layout.addWidget(self.analysis_label)
         self.analysis_banner.setVisible(False)
-        self.main.addWidget(self.analysis_banner)
+        overview_layout.addWidget(self.analysis_banner)
 
         # ---- KPIs ----
         kpi = QGridLayout()
-        self.main.addLayout(kpi)
+        overview_layout.addLayout(kpi)
 
         self.lbl_time = QLabel("--")
         self.lbl_score = QLabel("--")
@@ -358,11 +350,11 @@ class AuctionBrowser(QMainWindow):
             kpi.addWidget(c, 0, i)
 
         # ---- CONTENT ----
-        content = QHBoxLayout()
-        self.main.addLayout(content)
+        overview_content = QHBoxLayout()
+        overview_layout.addLayout(overview_content)
 
         self.card_details = Card("Auction Details")
-        content.addWidget(self.card_details, 2)
+        overview_content.addWidget(self.card_details, 2)
 
         scroll_style = (
             "QScrollArea { border: none; }"
@@ -388,8 +380,31 @@ class AuctionBrowser(QMainWindow):
         self.details_scroll.setWidget(details_container)
         self.card_details.layout.addWidget(self.details_scroll)
 
+        self.map_card = Card("Map Preview")
+        self.map_preview = QLabel("Map preview unavailable")
+        self.map_preview.setAlignment(Qt.AlignCenter)
+        self.map_preview.setFixedSize(240, 170)
+        self.map_preview.setStyleSheet(
+            "border:1px solid #1f2937; border-radius:12px;"
+            "background:#0b1222; color:#9ca3af;",
+        )
+        self.map_card.layout.addWidget(self.map_preview)
+        overview_content.addWidget(self.map_card, 1)
+
+        overview_actions = QHBoxLayout()
+        overview_actions.addStretch()
+        btn_map = QPushButton("Open in Google Maps")
+        btn_map.clicked.connect(self.open_map)
+        overview_actions.addWidget(btn_map)
+        overview_layout.addLayout(overview_actions)
+
+        gallery = QWidget()
+        gallery_layout = QVBoxLayout(gallery)
+        gallery_layout.setSpacing(14)
+        self.tabs.addTab(gallery, "Gallery")
+
         self.card_images = Card("Images")
-        content.addWidget(self.card_images, 3)
+        gallery_layout.addWidget(self.card_images)
         self.image_grid = QGridLayout()
         controls = QHBoxLayout()
         controls.setSpacing(8)
@@ -447,23 +462,28 @@ class AuctionBrowser(QMainWindow):
 
         self.render_vision_items([])
 
-        # ---- ACTIONS ----
+        activity = QWidget()
+        activity_layout = QVBoxLayout(activity)
+        activity_layout.setSpacing(14)
+        self.tabs.addTab(activity, "Activity")
+
+        self.recent_card = Card("Recent Vision Results", fixed_height=180)
+        recent_layout = QVBoxLayout()
+        recent_layout.setContentsMargins(0, 0, 0, 0)
+        self.recent_list = QListWidget()
+        self.recent_list.setFixedHeight(140)
+        self.recent_list.setToolTip(
+            "Cached analyses open immediately without reprocessing images."
+        )
+        self.recent_list.itemClicked.connect(self.load_cached_analysis)
+        recent_layout.addWidget(self.recent_list)
+        self.recent_card.layout.addLayout(recent_layout)
+        activity_layout.addWidget(self.recent_card)
+
         actions = QHBoxLayout()
         actions.setSpacing(12)
-        self.main.addLayout(actions)
+        activity_layout.addLayout(actions)
 
-        self.map_card = Card("Map Preview")
-        self.map_preview = QLabel("Map preview unavailable")
-        self.map_preview.setAlignment(Qt.AlignCenter)
-        self.map_preview.setFixedSize(240, 170)
-        self.map_preview.setStyleSheet(
-            "border:1px solid #1f2937; border-radius:12px;"
-            "background:#0b1222; color:#9ca3af;"
-        )
-        self.map_card.layout.addWidget(self.map_preview)
-
-        btn_map = QPushButton("Open in Google Maps")
-        btn_map.clicked.connect(self.open_map)
         btn_export = QPushButton("Export CSV")
         btn_export.clicked.connect(self.export_csv)
         btn_export_vision = QPushButton("Export Vision")
@@ -474,9 +494,7 @@ class AuctionBrowser(QMainWindow):
         vision_pdf.triggered.connect(self.export_vision_pdf)
         btn_export_vision.setMenu(vision_menu)
 
-        actions.addWidget(self.map_card)
         actions.addStretch()
-        actions.addWidget(btn_map)
         actions.addWidget(btn_export)
         actions.addWidget(btn_export_vision)
 
@@ -487,6 +505,13 @@ class AuctionBrowser(QMainWindow):
 
         self.bootstrap()
         self.refresh_recent_vision_results()
+
+    def on_tab_changed(self, index):
+        if not self.current:
+            return
+
+        self.update_profit_ratio_display()
+        self.update_distance_badge(self.current.get("facility", {}).get("marker"))
 
     # ================= DATA =================
     def run_worker(self, fn, cb):
