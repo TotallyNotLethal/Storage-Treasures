@@ -50,7 +50,6 @@ QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QSpinBox, QDoubleSpinBox {
 QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QComboBox:focus,
 QSpinBox:focus, QDoubleSpinBox:focus {
     border-color: #3b82f6;
-    box-shadow: 0 0 0 1px #3b82f6;
 }
 QComboBox::drop-down {
     subcontrol-origin: padding;
@@ -205,7 +204,6 @@ QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QSpinBox, QDoubleSpinBox {
 QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QComboBox:focus,
 QSpinBox:focus, QDoubleSpinBox:focus {
     border-color: #3b82f6;
-    box-shadow: 0 0 0 1px #bfdbfe;
 }
 QComboBox::drop-down {
     subcontrol-origin: padding;

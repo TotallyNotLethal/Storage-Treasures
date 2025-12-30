@@ -175,7 +175,7 @@ class MapPreview(QWidget):
             <link
               rel='stylesheet'
               href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'
-              integrity='sha256-sA+e2H1Lg0JEZ5dj62nCayG4h3GcGZTcECI1qek4z+M='
+              integrity='sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY='
               crossorigin=''
             />
             <style>
@@ -187,7 +187,7 @@ class MapPreview(QWidget):
             <div id='map'></div>
             <script
               src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
-              integrity='sha256-o9N1j7kQdwy3vWx3XvGkkgZ+3Jj8GkMq1kE1A6Bv700='
+              integrity='sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo='
               crossorigin=''
             ></script>
             <script>
@@ -1124,9 +1124,9 @@ class AuctionBrowser(QMainWindow):
                 time_item,
             ])
 
-            self.filtered.append(a)
+        self.filtered.append(a)
 
-        self.proxy_model.invalidateFilter()
+        self.proxy_model.invalidate()
         self.on_filter_text(self.filter_input.text())
         self.apply_sort()
         self.update_filter_status()
